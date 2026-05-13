@@ -128,8 +128,15 @@ async function builtinFind(rootDir, args) {
 
   const results = [];
 
+  // Standard find includes the starting point if it matches filters
+  const startDirStats = await stat(join(rootDir, searchDir)).catch(() => null);
+  if (startDirStats) {
+    const relPath = searchDir === '.' ? '.' : './' + searchDir.split(sep).join('/');
+    results.push(relPath);
+  }
+
   async function walk(dir, depth) {
-    if (depth > maxDepth) return;
+    if (depth >= maxDepth) return;
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       if (entry.name.startsWith('.') && entry.name !== '.') continue;

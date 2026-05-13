@@ -68,4 +68,15 @@ describe('NestJS docs VFS executor', () => {
     expect(result.stdout).toContain('./new.txt');
     expect(result.stdout).not.toContain('./ref.txt');
   });
+
+  it('find supports -maxdepth filtering', async () => {
+    const contentDir = await createFixture();
+    await mkdir(join(contentDir, 'a', 'b'), { recursive: true });
+    await writeFile(join(contentDir, 'a', 'b', 'c.md'), 'test');
+    
+    const result = await executeVfsCommand('find . -maxdepth 1', contentDir);
+    expect(result.stdout).toContain('./a');
+    expect(result.stdout).not.toContain('./a/b');
+    expect(result.stdout).not.toContain('./a/b/c.md');
+  });
 });
