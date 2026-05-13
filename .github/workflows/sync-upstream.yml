@@ -1,0 +1,37 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Setiap hari jam 00:00 UTC
+  workflow_dispatch: # Memungkinkan jalankan manual dari UI GitHub
+
+jobs:
+  sync:
+    if: github.repository == 'rijaluddina/docs.nestjs.com'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync Master with Upstream
+        run: |
+          git remote add upstream https://github.com/nestjs/docs.nestjs.com.git
+          git fetch upstream master
+          git merge upstream/master --no-edit || (echo "Conflict in master" && exit 1)
+          git push origin master
+
+      - name: Merge Master into Feature Branch
+        run: |
+          git fetch origin feat/mcp-optimization
+          git checkout feat/mcp-optimization
+          git merge master --no-edit || (echo "Conflict in feat branch" && exit 1)
+          git push origin feat/mcp-optimization
