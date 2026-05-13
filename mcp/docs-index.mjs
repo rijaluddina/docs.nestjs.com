@@ -37,10 +37,10 @@ export class DocsIndex {
     this.contentDir = resolve(contentDir);
     this.files = []; // List of relative paths
     this.cache = new Map(); // path -> full content
-    this.chunks = []; // Array of chunk objects { id, title, content, path }
+    this.chunks = []; // Array of chunk objects { id, title, content, path, category }
     this.miniSearch = new MiniSearch({
-      fields: ['title', 'content'], // fields to index for full-text search
-      storeFields: ['title', 'content', 'path'], // fields to return with search results
+      fields: ['title', 'content', 'category'], // fields to index for full-text search
+      storeFields: ['title', 'content', 'path', 'category'], // fields to return with search results
       searchOptions: {
         boost: { title: 2 },
         fuzzy: 0.2,
@@ -62,8 +62,8 @@ export class DocsIndex {
     const newCache = new Map();
     const newChunks = [];
     const newMiniSearch = new MiniSearch({
-      fields: ['title', 'content'],
-      storeFields: ['title', 'content', 'path'],
+      fields: ['title', 'content', 'category'],
+      storeFields: ['title', 'content', 'path', 'category'],
       searchOptions: {
         boost: { title: 2 },
         fuzzy: 0.2,
@@ -125,6 +125,15 @@ export class DocsIndex {
 
   chunkMarkdown(path, text, startId = 0) {
     const fileTitle = this.titleFromMarkdown(path, text);
+    // Determine category from path
+    // content/fundamentals/pipes.md -> fundamentals
+    // content/controllers.md -> core
+    const pathParts = path.split('/');
+    let category = 'core';
+    if (pathParts.length > 2 && pathParts[0] === 'content') {
+      category = pathParts[1];
+    }
+
     // Split by ##, ###, or #### headers
     const sections = text.split(/^(?=(?:##|###|####)\s+)/m);
     const chunks = [];
@@ -149,6 +158,7 @@ export class DocsIndex {
         title,
         content: trimmedSection,
         path,
+        category,
       });
     });
 
@@ -202,12 +212,22 @@ export class DocsIndex {
     return fullPath;
   }
 
-  async searchDocs(query, { limit = 10 } = {}) {
+  async searchDocs(query, { limit = 10, category: filterCategory } = {}) {
     if (!this.isReady) {
       await this.build();
     }
 
-    const results = this.miniSearch.search(query);
+    const searchOptions = {
+      fuzzy: 0.2,
+      prefix: true,
+      boost: { title: 2 },
+    };
+
+    if (filterCategory) {
+      searchOptions.filter = (result) => result.category === filterCategory;
+    }
+
+    const results = this.miniSearch.search(query, searchOptions);
     const queryTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 1);
 
     return results.slice(0, limit).map(result => {
@@ -216,11 +236,162 @@ export class DocsIndex {
       return {
         path: result.path,
         title: result.title,
+        category: result.category,
         score: result.score,
         snippet,
         url: `https://docs.nestjs.com/${result.path.replace(/^content\//, '').replace(/\.md$/, '')}`,
       };
     });
+  }
+
+  async extractCodeExamples({ path: requestedPath, language: filterLanguage } = {}) {
+    if (!this.isReady) {
+      await this.build();
+    }
+
+    let chunksToProcess = this.chunks;
+    if (requestedPath) {
+      chunksToProcess = this.chunks.filter(c => c.path === requestedPath);
+    }
+
+    const examples = [];
+    const codeBlockRegex = /```(\w+)\n([\s\S]*?)```/g;
+
+    for (const chunk of chunksToProcess) {
+      let match;
+      while ((match = codeBlockRegex.exec(chunk.content)) !== null) {
+        const language = match[1];
+        const fullContent = match[2];
+        const sections = fullContent.split('@@switch');
+        
+        let sharedFilename = null;
+        const firstSectionFilenameMatch = sections[0].match(/^@@filename\(([^)]+)\)\n/);
+        if (firstSectionFilenameMatch) {
+          sharedFilename = firstSectionFilenameMatch[1];
+        }
+
+        sections.forEach((section, index) => {
+          let filename = sharedFilename;
+          let code = section.trim();
+          
+          if (index === 0 && sharedFilename) {
+            code = code.replace(/^@@filename\(([^)]+)\)\n/, '').trim();
+          } else {
+            const sectionFilenameMatch = code.match(/^@@filename\(([^)]+)\)\n/);
+            if (sectionFilenameMatch) {
+              filename = sectionFilenameMatch[1];
+              code = code.replace(/^@@filename\(([^)]+)\)\n/, '').trim();
+            }
+          }
+          
+          let finalLang = language;
+          if (sections.length > 1) {
+            if (index === 0) finalLang = 'typescript';
+            if (index === 1) finalLang = 'javascript';
+          }
+
+          if (!filterLanguage || finalLang.toLowerCase() === filterLanguage.toLowerCase()) {
+            examples.push({
+              path: chunk.path,
+              context: chunk.title,
+              language: finalLang,
+              filename,
+              code,
+            });
+          }
+        });
+      }
+    }
+
+    return examples;
+  }
+
+  async getTopics() {
+    if (!this.isReady) {
+      await this.build();
+    }
+
+    const topics = {};
+    for (const file of this.files) {
+      const pathParts = file.split('/');
+      let category = 'core';
+      if (pathParts.length > 2 && pathParts[0] === 'content') {
+        category = pathParts[1];
+      }
+      
+      if (!topics[category]) {
+        topics[category] = {
+          category,
+          files: [],
+        };
+      }
+      
+      topics[category].files.push({
+        path: file,
+        title: this.titleFromMarkdown(file, this.cache.get(file) || ''),
+      });
+    }
+
+    return Object.values(topics).sort((a, b) => a.category.localeCompare(b.category));
+  }
+
+  async getRelatedDocs(path, { limit = 5 } = {}) {
+    if (!this.isReady) {
+      await this.build();
+    }
+
+    const content = this.cache.get(path);
+    if (!content) {
+      throw new Error(`Document not found: ${path}`);
+    }
+
+    const title = this.titleFromMarkdown(path, content);
+    // Search for documents similar to the title, but exclude the current document
+    const results = this.miniSearch.search(title, {
+      boost: { title: 2 },
+      filter: (result) => result.path !== path,
+    });
+
+    // Also include documents in the same category
+    const pathParts = path.split('/');
+    let category = 'core';
+    if (pathParts.length > 2 && pathParts[0] === 'content') {
+      category = pathParts[1];
+    }
+
+    const sameCategoryFiles = this.files
+      .filter(f => f !== path)
+      .filter(f => {
+        const parts = f.split('/');
+        let cat = 'core';
+        if (parts.length > 2 && parts[0] === 'content') {
+          cat = parts[1];
+        }
+        return cat === category;
+      })
+      .slice(0, 3); // Limit to 3 from same category
+
+    const related = results.slice(0, limit).map(result => ({
+      path: result.path,
+      title: result.title,
+      score: result.score,
+      url: `https://docs.nestjs.com/${result.path.replace(/^content\//, '').replace(/\.md$/, '')}`,
+    }));
+
+    // Merge and deduplicate
+    const seenPaths = new Set(related.map(r => r.path));
+    for (const file of sameCategoryFiles) {
+      if (!seenPaths.has(file)) {
+        related.push({
+          path: file,
+          title: this.titleFromMarkdown(file, this.cache.get(file) || ''),
+          url: `https://docs.nestjs.com/${file.replace(/^content\//, '').replace(/\.md$/, '')}`,
+        });
+        seenPaths.add(file);
+      }
+    }
+
+    return related.slice(0, limit);
   }
 
   extractSnippet(text, queryTerms) {
@@ -276,4 +447,16 @@ export async function readDocFile(index, path) {
 
 export async function searchDocs(index, query, options) {
   return index.searchDocs(query, options);
+}
+
+export async function extractCodeExamples(index, options) {
+  return index.extractCodeExamples(options);
+}
+
+export async function getTopics(index) {
+  return index.getTopics();
+}
+
+export async function getRelatedDocs(index, path, options) {
+  return index.getRelatedDocs(path, options);
 }

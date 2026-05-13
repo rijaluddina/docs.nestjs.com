@@ -8,6 +8,8 @@ import {
   listMarkdownFiles,
   readDocFile,
   searchDocs,
+  extractCodeExamples,
+  getTopics,
 } from './docs-index.mjs';
 
 async function createFixture() {
@@ -17,11 +19,11 @@ async function createFixture() {
   await mkdir(join(contentDir, 'fundamentals'), { recursive: true });
   await writeFile(
     join(contentDir, 'controllers.md'),
-    '# Controllers\n\nControllers route incoming requests.',
+    '# Controllers\n\nControllers route incoming requests.\n\n```typescript\n@@filename(cats.controller)\nexport class CatsController {}\n@@switch\nexport class CatsController {}\n```',
   );
   await writeFile(
     join(contentDir, 'fundamentals', 'dependency-injection.md'),
-    '# Dependency Injection\n\nProviders can be injected into controllers.',
+    '# Dependency Injection\n\nProviders can be injected into classes.',
   );
   await writeFile(join(rootDir, 'README.md'), '# Not indexed');
 
@@ -58,5 +60,38 @@ describe('NestJS docs MCP index', () => {
     await expect(readDocFile(index, 'README.md')).rejects.toThrow(
       'Only content markdown files can be read',
     );
+  });
+
+  it('filters search by category', async () => {
+    const index = await createFixture();
+
+    const results = await searchDocs(index, 'Controllers', { category: 'core' });
+    expect(results).toHaveLength(1);
+    expect(results[0].category).toBe('core');
+
+    const emptyResults = await searchDocs(index, 'Controllers', { category: 'fundamentals' });
+    expect(emptyResults).toHaveLength(0);
+  });
+
+  it('extracts code examples', async () => {
+    const index = await createFixture();
+
+    const examples = await extractCodeExamples(index, { path: 'content/controllers.md' });
+    expect(examples).toHaveLength(2);
+    expect(examples[0]).toEqual(expect.objectContaining({
+      language: 'typescript',
+      filename: 'cats.controller',
+    }));
+    expect(examples[1]).toEqual(expect.objectContaining({
+      language: 'javascript',
+    }));
+  });
+
+  it('gets topics hierarchy', async () => {
+    const index = await createFixture();
+
+    const topics = await getTopics(index);
+    expect(topics).toHaveLength(2);
+    expect(topics.map(t => t.category)).toEqual(['core', 'fundamentals']);
   });
 });

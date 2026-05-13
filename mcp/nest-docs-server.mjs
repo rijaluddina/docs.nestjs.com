@@ -6,6 +6,9 @@ import {
   listMarkdownFiles,
   readDocFile,
   searchDocs,
+  extractCodeExamples,
+  getTopics,
+  getRelatedDocs,
 } from './docs-index.mjs';
 import { executeVfsCommand } from './vfs-executor.mjs';
 
@@ -79,16 +82,27 @@ async function createNestDocsMcpServer() {
   );
 
   server.registerTool(
+    'get_topics',
+    {
+      title: 'Get NestJS Topics',
+      description: 'List all major topics (categories) and their associated documentation pages.',
+      inputSchema: {},
+    },
+    async () => jsonText(await getTopics(idx)),
+  );
+
+  server.registerTool(
     'search_docs',
     {
       title: 'Search NestJS Docs',
-      description: 'Search NestJS documentation markdown files by text.',
+      description: 'Search NestJS documentation markdown files by text. Supports category filtering.',
       inputSchema: {
         query: z.string().min(1).describe('Text to search for.'),
         limit: z.number().int().min(1).max(25).optional().describe('Maximum number of matches.'),
+        category: z.string().optional().describe('Filter by category (e.g., fundamentals, graphql, microservices, core).'),
       },
     },
-    async ({ query, limit }) => jsonText(await searchDocs(idx, query, { limit })),
+    async ({ query, limit, category }) => jsonText(await searchDocs(idx, query, { limit, category })),
   );
 
   server.registerTool(
@@ -107,6 +121,57 @@ async function createNestDocsMcpServer() {
       } catch (error) {
         return {
           content: [{ type: 'text', text: `Error reading doc: ${error.message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_related_docs',
+    {
+      title: 'Get Related NestJS Docs',
+      description: 'Suggest related documentation pages based on a specific doc path.',
+      inputSchema: {
+        path: z.string().min(1).describe('The path of the current document (e.g., content/controllers.md).'),
+        limit: z.number().int().min(1).max(10).optional().describe('Maximum number of suggestions.'),
+      },
+    },
+    async ({ path, limit }) => {
+      try {
+        const related = await getRelatedDocs(idx, path, { limit });
+        return jsonText(related);
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: `Error getting related docs: ${error.message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'extract_code_examples',
+    {
+      title: 'Extract NestJS Code Examples',
+      description: 'Extract and filter code snippets from documentation. Supports filtering by language (ts, js) and path.',
+      inputSchema: {
+        path: z.string().optional().describe('Filter by specific document path (e.g., content/controllers.md).'),
+        language: z.enum(['typescript', 'javascript', 'ts', 'js']).optional().describe('Filter by code language.'),
+      },
+    },
+    async ({ path, language }) => {
+      // Normalize language input
+      let lang = language;
+      if (lang === 'ts') lang = 'typescript';
+      if (lang === 'js') lang = 'javascript';
+
+      try {
+        const examples = await extractCodeExamples(idx, { path, language: lang });
+        return jsonText(examples);
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: `Error extracting code examples: ${error.message}` }],
           isError: true,
         };
       }
