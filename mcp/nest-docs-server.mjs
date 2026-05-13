@@ -9,6 +9,8 @@ import {
   extractCodeExamples,
   getTopics,
   getRelatedDocs,
+  getMigrationGuide,
+  getVersionInfo,
 } from './docs-index.mjs';
 import { executeVfsCommand } from './vfs-executor.mjs';
 
@@ -144,6 +146,48 @@ async function createNestDocsMcpServer() {
       } catch (error) {
         return {
           content: [{ type: 'text', text: `Error getting related docs: ${error.message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_migration_guide',
+    {
+      title: 'Get NestJS Migration Guide',
+      description: 'Get the latest migration guide or a specific section from it.',
+      inputSchema: {
+        section: z.string().optional().describe('Filter by specific section title (e.g., "Express v5", "Fastify v5").'),
+      },
+    },
+    async ({ section }) => {
+      try {
+        const guide = await getMigrationGuide(idx, { section });
+        return text(guide);
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: `Error: ${error.message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_version_info',
+    {
+      title: 'Get NestJS Version Info',
+      description: 'Get information about the latest NestJS version and migration status.',
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const info = await getVersionInfo(idx);
+        return jsonText(info);
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: `Error: ${error.message}` }],
           isError: true,
         };
       }

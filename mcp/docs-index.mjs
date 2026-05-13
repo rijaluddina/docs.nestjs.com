@@ -394,6 +394,56 @@ export class DocsIndex {
     return related.slice(0, limit);
   }
 
+  async getMigrationGuide({ section: sectionTitle } = {}) {
+    if (!this.isReady) {
+      await this.build();
+    }
+
+    const migrationDoc = 'content/migration.md';
+    const content = this.cache.get(migrationDoc);
+    if (!content) {
+      throw new Error(`Migration guide not found: ${migrationDoc}`);
+    }
+
+    if (!sectionTitle) {
+      return content;
+    }
+
+    // Split by headers and find the matching section
+    const sections = content.split(/^(?=(?:###|####)\s+)/m);
+    const matchingSection = sections.find(s => 
+      s.toLowerCase().includes(sectionTitle.toLowerCase()) && 
+      /^(?:###|####)\s+/.test(s)
+    );
+
+    return matchingSection || `Section "${sectionTitle}" not found in migration guide.`;
+  }
+
+  async getVersionInfo() {
+    if (!this.isReady) {
+      await this.build();
+    }
+
+    const migrationDoc = 'content/migration.md';
+    const content = this.cache.get(migrationDoc);
+    if (!content) {
+      return { latestVersion: 'unknown', description: 'Migration guide not found.' };
+    }
+
+    // Try to extract version from the first paragraph
+    // Example: "This article offers a comprehensive guide for migrating from NestJS version 10 to version 11."
+    const versionMatch = content.match(/version\s+(\d+)\s+to\s+version\s+(\d+)/i);
+    const latestVersion = versionMatch ? versionMatch[2] : 'unknown';
+    const previousVersion = versionMatch ? versionMatch[1] : 'unknown';
+
+    return {
+      latestVersion,
+      previousVersion,
+      title: this.titleFromMarkdown(migrationDoc, content),
+      summary: content.split('\n').filter(line => line.trim() && !line.startsWith('#')).slice(0, 3).join('\n'),
+    };
+  }
+
   extractSnippet(text, queryTerms) {
     const maxLen = 400;
     const textLower = text.toLowerCase();
@@ -459,4 +509,12 @@ export async function getTopics(index) {
 
 export async function getRelatedDocs(index, path, options) {
   return index.getRelatedDocs(path, options);
+}
+
+export async function getMigrationGuide(index, options) {
+  return index.getMigrationGuide(options);
+}
+
+export async function getVersionInfo(index) {
+  return index.getVersionInfo();
 }
