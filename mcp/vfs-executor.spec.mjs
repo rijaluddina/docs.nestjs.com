@@ -37,4 +37,35 @@ describe('NestJS docs VFS executor', () => {
 
     expect(result.stdout).toContain('recipes/passport.md:1:AuthGuard');
   });
+
+  it('tree shows correct indentation for subdirectories', async () => {
+    const contentDir = await createFixture();
+    const result = await executeVfsCommand('tree recipes', contentDir);
+    expect(result.stdout).toContain('recipes\n└── passport.md');
+  });
+
+  it('find supports -size filtering', async () => {
+    const contentDir = await createFixture();
+    await writeFile(join(contentDir, 'large.txt'), 'A'.repeat(1024));
+    
+    const result = await executeVfsCommand('find . -size +500c', contentDir);
+    expect(result.stdout).toContain('./large.txt');
+    expect(result.stdout).not.toContain('./recipes/passport.md');
+  });
+
+  it('find supports -newer comparison', async () => {
+    const contentDir = await createFixture();
+    const { utimes } = await import('node:fs/promises');
+    
+    await writeFile(join(contentDir, 'ref.txt'), 'reference');
+    await writeFile(join(contentDir, 'new.txt'), 'new');
+    
+    const now = Date.now();
+    await utimes(join(contentDir, 'ref.txt'), new Date(now - 10000), new Date(now - 10000));
+    await utimes(join(contentDir, 'new.txt'), new Date(now), new Date(now));
+    
+    const result = await executeVfsCommand('find . -newer ref.txt', contentDir);
+    expect(result.stdout).toContain('./new.txt');
+    expect(result.stdout).not.toContain('./ref.txt');
+  });
 });

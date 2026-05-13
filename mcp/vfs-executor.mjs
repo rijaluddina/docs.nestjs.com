@@ -94,6 +94,23 @@ function parseFlag(args, flag) {
   return val || null;
 }
 
+function parseSize(sizeStr) {
+  const m = sizeStr.match(/^([+-]?)(\d+)([bcwkMG]?)$/);
+  if (!m) return null;
+  const modifier = m[1] || '';
+  const val = parseInt(m[2], 10);
+  const unit = m[3] || 'b';
+  const units = {
+    'b': 512,
+    'c': 1,
+    'w': 2,
+    'k': 1024,
+    'M': 1024 * 1024,
+    'G': 1024 * 1024 * 1024
+  };
+  return { modifier, bytes: val * (units[unit] || 512) };
+}
+
 async function builtinFind(rootDir, args) {
   const pathArgs = args.split(/\s+/).filter(Boolean);
   const searchDir = pathArgs.length > 0 && !pathArgs[0].startsWith('-') ? pathArgs[0] : '.';
@@ -102,8 +119,12 @@ async function builtinFind(rootDir, args) {
   const namePat = parseFlag(restArgs, '-name');
   const pattern = namePat ? new RegExp('^' + namePat.replace(/\*/g, '.*').replace(/\?/g, '.') + '$') : null;
   const maxDepthStr = parseFlag(restArgs, '-maxdepth');
-  const maxDepth = maxDepthStr ? parseInt(maxDepthStr) : Infinity;
+  const maxDepth = maxDepthStr ? parseInt(maxDepthStr, 10) : Infinity;
   const typeFilter = parseFlag(restArgs, '-type');
+  const sizeStr = parseFlag(restArgs, '-size');
+  const sizeSpec = sizeStr ? parseSize(sizeStr) : null;
+  const newerFile = parseFlag(restArgs, '-newer');
+  const newerMtime = newerFile ? await stat(join(rootDir, newerFile)).then(s => s.mtimeMs).catch(() => null) : null;
 
   const results = [];
 
@@ -119,10 +140,21 @@ async function builtinFind(rootDir, args) {
       const isDir = entry.isDirectory();
       if (isDir && ['node_modules', '.git', 'dist', '.angular', 'tmp', '.netlify'].includes(entry.name)) continue;
 
+      let stats = null;
+      if (sizeSpec || newerMtime) {
+        stats = await stat(fullPath).catch(() => null);
+      }
+
       const matchType = !typeFilter || (typeFilter === 'd' ? isDir : typeFilter === 'f' ? !isDir : true);
       const matchName = !pattern || pattern.test(entry.name);
+      const matchSize = !sizeSpec || (stats && (
+        sizeSpec.modifier === '+' ? stats.size > sizeSpec.bytes :
+        sizeSpec.modifier === '-' ? stats.size < sizeSpec.bytes :
+        stats.size === sizeSpec.bytes
+      ));
+      const matchNewer = !newerMtime || (stats && stats.mtimeMs > newerMtime);
 
-      if (matchType && matchName) {
+      if (matchType && matchName && matchSize && matchNewer) {
         results.push('./' + relPath.split(sep).join('/'));
       }
 
@@ -149,38 +181,48 @@ async function builtinTree(rootDir, args) {
   const dirsOnly = /\s-d\s/.test(' ' + args + ' ');
   const startDir = join(rootDir, searchDir);
 
-  async function* walk(dir, depth) {
+  let dirCount = 0;
+  let fileCount = 0;
+
+  async function* walk(dir, depth, currentPrefix = '') {
     if (depth >= maxDepth) return;
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-    const dirs = entries.filter(e => e.isDirectory() && !ignoreDirs.has(e.name));
-    const files = entries.filter(e => e.isFile());
+    const filtered = entries
+      .filter(e => {
+        if (e.name.startsWith('.') && e.name !== '.') return false;
+        if (e.isDirectory() && ignoreDirs.has(e.name)) return false;
+        if (dirsOnly && !e.isDirectory()) return false;
+        return true;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
 
-    for (const entry of [...dirs, ...files]) {
-      if (dirsOnly && !entry.isDirectory()) continue;
-      const prefix = depth === 0 ? '' : '│   '.repeat(depth - 1) + '├── ';
-      yield prefix + entry.name;
+    for (let i = 0; i < filtered.length; i++) {
+      const entry = filtered[i];
+      const isLast = i === filtered.length - 1;
+      const connector = isLast ? '└── ' : '├── ';
+
+      if (entry.isDirectory()) dirCount++;
+      else fileCount++;
+
+      yield currentPrefix + connector + entry.name;
 
       if (entry.isDirectory()) {
-        yield* walk(join(dir, entry.name), depth + 1);
+        const nextPrefix = currentPrefix + (isLast ? '    ' : '│   ');
+        yield* walk(join(dir, entry.name), depth + 1, nextPrefix);
       }
     }
   }
 
   const lines = [];
-  const basename = startDir.split('/').pop() || 'content';
+  const basename = searchDir === '.' ? '.' : searchDir.split('/').filter(Boolean).pop() || 'content';
   lines.push(basename);
 
-  for await (const line of walk(startDir, 0)) {
+  for await (const line of walk(startDir, 0, '')) {
     lines.push(line);
   }
 
-  const stats = await stat(startDir).catch(() => null);
-  if (stats) {
-    const dirCount = lines.filter(l => l.endsWith('/') || l.includes('│')).length;
-    const fileCount = lines.length - 1 - dirCount;
-    lines.push('');
-    lines.push(`${dirCount} directories, ${fileCount} files`);
-  }
+  lines.push('');
+  lines.push(`${dirCount} directories, ${fileCount} files`);
 
   return lines.join('\n');
 }
