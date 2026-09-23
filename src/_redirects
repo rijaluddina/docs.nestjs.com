@@ -1,3 +1,42 @@
 # src/_redirects
 
+# Archived documentation versions are static builds committed under dist/vN.
+# Netlify serves existing files first, so these rules only kick in for client
+# side routes (e.g. /v11/techniques/caching) and keep them inside the archive
+# instead of falling through to the current docs.
+/v4/*   /v4/index.html   200
+/v5/*   /v5/index.html   200
+/v6/*   /v6/index.html   200
+/v7/*   /v7/index.html   200
+/v8/*   /v8/index.html   200
+/v9/*   /v9/index.html   200
+/v10/*  /v10/index.html  200
+/v11/*  /v11/index.html  200
+
+# Markdown copies of chapters that moved to other URLs (see llms.txt). The
+# chapters themselves redirect in the Angular routes, but these static files
+# never reach the app.
+/application/http-module.md        /application/http-client.md  301
+/recipes/mikroorm.md               /data/mikroorm.md  301
+/recipes/prisma.md                 /data/prisma.md  301
+/techniques/caching.md             /data/caching.md  301
+/techniques/compression.md         /http/compression.md  301
+/techniques/configuration.md       /application/configuration.md  301
+/techniques/cookies.md             /http/cookies.md  301
+/techniques/database.md            /data/overview.md  301
+/techniques/events.md              /application/events.md  301
+/techniques/file-upload.md         /http/file-upload.md  301
+/techniques/http-module.md         /application/http-client.md  301
+/techniques/logger.md              /application/logger.md  301
+/techniques/mongodb.md             /data/mongodb.md  301
+/techniques/mvc.md                 /http/mvc.md  301
+/techniques/performance.md         /http/performance.md  301
+/techniques/queues.md              /application/queues.md  301
+/techniques/serialization.md       /application/serialization.md  301
+/techniques/server-sent-events.md  /http/server-sent-events.md  301
+/techniques/session.md             /http/session.md  301
+/techniques/task-scheduling.md     /application/task-scheduling.md  301
+/techniques/validation.md          /application/validation.md  301
+/techniques/versioning.md          /http/versioning.md  301
+
 /*  /index.html 200

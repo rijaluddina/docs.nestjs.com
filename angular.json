@@ -12,14 +12,18 @@
           "builder": "@angular-devkit/build-angular:application",
           "options": {
             "aot": true,
-            "allowedCommonJsDependencies": ["prismjs"],
+            "allowedCommonJsDependencies": [
+              "prismjs"
+            ],
             "outputPath": {
               "base": "dist",
               "browser": ""
             },
             "index": "src/index.html",
             "tsConfig": "src/tsconfig.app.json",
-            "polyfills": ["zone.js"],
+            "polyfills": [
+              "zone.js"
+            ],
             "assets": [
               "src/assets",
               "src/favicon.ico",
@@ -27,9 +31,15 @@
               "src/apple-touch-icon-precomposed.png",
               "src/browserconfig.xml",
               "src/mstile-150x150.png",
-              "src/_redirects"
+              "src/_redirects",
+              "src/llms.txt",
+              "src/llms-full.txt",
+              "src/robots.txt",
+              { "glob": "**/*.md", "input": "src/md", "output": "/" }
             ],
-            "styles": ["src/styles.scss"],
+            "styles": [
+              "src/styles.scss"
+            ],
             "browser": "src/main.ts"
           },
           "configurations": {
@@ -60,6 +70,12 @@
                   "with": "src/environments/environment.prod.ts"
                 }
               ]
+            },
+            "development": {
+              "optimization": false,
+              "sourceMap": true,
+              "namedChunks": true,
+              "extractLicenses": false
             }
           }
         },
@@ -81,7 +97,12 @@
           }
         },
         "test": {
-          "builder": "@angular/build:unit-test"
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "tsConfig": "src/tsconfig.spec.json",
+            "buildTarget": "::development",
+            "runner": "vitest"
+          }
         }
       }
     }

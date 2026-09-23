@@ -10,9 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Use Node.js 22.x
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24.x
       # Build needs around 400 seconds on Netlify.
@@ -22,7 +22,7 @@ jobs:
       - name: Sleep 400 seconds
         run: sleep 400
       - name: Waiting for 200 from the Netlify Preview
-        uses: jakepartusch/wait-for-netlify-action@v1
+        uses: jakepartusch/wait-for-netlify-action@v1.4
         id: wait-for-netflify-preview
         with:
           site_name: 'docs-nestjs'

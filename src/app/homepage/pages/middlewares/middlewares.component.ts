@@ -1,4 +1,5 @@
-import { Component } from '@angular/core';
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { BasePageComponent } from '../page/page.component';
 import { CopyButtonComponent } from '../../../shared/components/copy-button/copy-button.component';
 import { TabsComponent } from '../../../shared/components/tabs/tabs.component';
@@ -9,7 +10,9 @@ import { ExtensionPipe } from '../../../shared/pipes/extension.pipe';
     selector: 'app-middlewares',
     templateUrl: './middlewares.component.html',
     standalone: true,
+    changeDetection: ChangeDetectionStrategy.Eager,
     imports: [
+        RouterLink,
         CopyButtonComponent,
         TabsComponent,
         HeaderAnchorDirective,
