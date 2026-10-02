@@ -7,8 +7,8 @@ import { TabsComponent } from '../../../../shared/components/tabs/tabs.component
 import { ExtensionPipe } from '../../../../shared/pipes/extension.pipe';
 
 @Component({
-    selector: 'app-introduction',
-    templateUrl: './introduction.component.html',
+    selector: 'app-webhooks',
+    templateUrl: './webhooks.component.html',
     changeDetection: ChangeDetectionStrategy.OnPush,
     standalone: true,
     imports: [
@@ -19,4 +19,4 @@ import { ExtensionPipe } from '../../../../shared/pipes/extension.pipe';
         ExtensionPipe,
     ],
 })
-export class IntroductionComponent extends BasePageComponent {}
+export class WebhooksComponent extends BasePageComponent {}

@@ -7,8 +7,8 @@ import { TabsComponent } from '../../../../shared/components/tabs/tabs.component
 import { ExtensionPipe } from '../../../../shared/pipes/extension.pipe';
 
 @Component({
-    selector: 'app-introduction',
-    templateUrl: './introduction.component.html',
+    selector: 'app-workflows',
+    templateUrl: './workflows.component.html',
     changeDetection: ChangeDetectionStrategy.OnPush,
     standalone: true,
     imports: [
@@ -19,4 +19,4 @@ import { ExtensionPipe } from '../../../../shared/pipes/extension.pipe';
         ExtensionPipe,
     ],
 })
-export class IntroductionComponent extends BasePageComponent {}
+export class WorkflowsComponent extends BasePageComponent {}
