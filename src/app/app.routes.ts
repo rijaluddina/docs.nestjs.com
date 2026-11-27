@@ -109,6 +109,13 @@ export const routes: Routes = [
         data: { title: 'Official Support' },
       },
       {
+        path: 'tutorials',
+        loadChildren: () =>
+          import('./homepage/pages/tutorials/tutorials.routes').then(
+            (r) => r.TUTORIALS_ROUTES,
+          ),
+      },
+      {
         path: 'fundamentals',
         loadChildren: () =>
           import('./homepage/pages/fundamentals/fundamentals.routes').then(
@@ -120,6 +127,34 @@ export const routes: Routes = [
         loadChildren: () =>
           import('./homepage/pages/techniques/techniques.routes').then(
             (r) => r.TECHNIQUES_ROUTES,
+          ),
+      },
+      {
+        path: 'application',
+        loadChildren: () =>
+          import('./homepage/pages/application/application.routes').then(
+            (r) => r.APPLICATION_ROUTES,
+          ),
+      },
+      {
+        path: 'data',
+        loadChildren: () =>
+          import('./homepage/pages/data/data.routes').then(
+            (r) => r.DATA_ROUTES,
+          ),
+      },
+      {
+        path: 'reliability',
+        loadChildren: () =>
+          import('./homepage/pages/reliability/reliability.routes').then(
+            (r) => r.RELIABILITY_ROUTES,
+          ),
+      },
+      {
+        path: 'http',
+        loadChildren: () =>
+          import('./homepage/pages/http/http.routes').then(
+            (r) => r.HTTP_ROUTES,
           ),
       },
       {
@@ -144,6 +179,16 @@ export const routes: Routes = [
           ),
       },
       {
+        path: 'mcp',
+        loadChildren: () =>
+          import('./homepage/pages/mcp/mcp.routes').then((r) => r.MCP_ROUTES),
+      },
+      {
+        path: 'ai',
+        loadChildren: () =>
+          import('./homepage/pages/ai/ai.routes').then((r) => r.AI_ROUTES),
+      },
+      {
         path: 'microservices',
         loadChildren: () =>
           import('./homepage/pages/microservices/microservices.routes').then(
@@ -155,6 +200,13 @@ export const routes: Routes = [
         loadChildren: () =>
           import('./homepage/pages/recipes/recipes.routes').then(
             (r) => r.RECIPES_ROUTES,
+          ),
+      },
+      {
+        path: 'migrating',
+        loadChildren: () =>
+          import('./homepage/pages/migrating/migrating.routes').then(
+            (r) => r.MIGRATING_ROUTES,
           ),
       },
       {
@@ -198,6 +250,10 @@ export const routes: Routes = [
 ];
 
 export const RoutingModule = RouterModule.forRoot(routes, {
+  // Pages are prerendered. Without hydration, the app replaces that markup as
+  // soon as the root component is created, so the first navigation - including
+  // its lazy chunk - has to finish before then, or the page would go blank.
+  initialNavigation: 'enabledBlocking',
   scrollPositionRestoration: 'enabled',
   anchorScrolling: 'enabled',
   preloadingStrategy: PreloadAllModules,

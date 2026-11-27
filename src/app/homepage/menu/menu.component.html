@@ -1,12 +1,16 @@
-<nav class="nav-container" (click)="$event.stopPropagation()">
+<nav
+  class="nav-container"
+  aria-label="Documentation"
+  (click)="$event.stopPropagation()"
+>
   @for (item of items; track item) {
     <app-menu-item
       [isOpen]="item.isOpened"
       [title]="item.title"
-      [externalUrl]="item?.externalUrl"
+      [externalUrl]="item.externalUrl"
       [isNew]="item.isNew"
-      [icon]="item?.icon"
-      [path]="item?.path"
+      [icon]="item.icon"
+      [path]="item.path"
       [children]="item.children"
       class="nav-item"
     ></app-menu-item>
@@ -18,5 +22,5 @@
     class="btn btn-support"
     >Get enterprise support</a
     >
-    <a href="https://docs.nestjs.com/v10" class="btn btn-version">Version 10</a>
+    <a href="https://docs.nestjs.com/v11" class="btn btn-version">See Version 11</a>
   </nav>

@@ -1,12 +1,15 @@
+import { isPlatformBrowser, PlatformLocation } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   ChangeDetectorRef,
   Component,
   ElementRef,
+  inject,
   Input,
   OnChanges,
   OnDestroy,
   OnInit,
+  PLATFORM_ID,
   Renderer2,
   ViewChild,
 } from '@angular/core';
@@ -29,6 +32,12 @@ interface HeadingElement {
     imports: [],
 })
 export class TocComponent implements OnInit, OnDestroy, OnChanges {
+  private readonly cd = inject(ChangeDetectorRef);
+  private readonly renderer = inject(Renderer2);
+  private readonly platformLocation = inject(PlatformLocation);
+  // A prerendered page lists its headings; tracking them needs a window.
+  private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
+
   @Input()
   contentReference: HTMLElement;
 
@@ -47,18 +56,15 @@ export class TocComponent implements OnInit, OnDestroy, OnChanges {
   private timerSubscription: Subscription;
   private maxTopOffset: number;
 
-  constructor(
-    private readonly cd: ChangeDetectorRef,
-    private readonly renderer: Renderer2,
-  ) {}
-
   ngOnInit() {
-    this.scrollSubscription = fromEvent(window, 'scroll')
-      .pipe(debounceTime(this.scrollDebounceTime))
-      .subscribe(() => {
-        this.findCurrentHeading();
-        this.checkViewportBoundaries();
-      });
+    if (this.isBrowser) {
+      this.scrollSubscription = fromEvent(window, 'scroll')
+        .pipe(debounceTime(this.scrollDebounceTime))
+        .subscribe(() => {
+          this.findCurrentHeading();
+          this.checkViewportBoundaries();
+        });
+    }
 
     this.init();
     this.updateOffsetTop();
@@ -77,6 +83,9 @@ export class TocComponent implements OnInit, OnDestroy, OnChanges {
 
   init() {
     this.lookupHeadings();
+    if (!this.isBrowser) {
+      return;
+    }
     this.findCurrentHeading();
     this.findMaxTopOffset();
   }
@@ -99,6 +108,9 @@ export class TocComponent implements OnInit, OnDestroy, OnChanges {
   }
 
   updateOffsetTop() {
+    if (!this.isBrowser) {
+      return;
+    }
     // need to recalculate max position as well as headings offset
     // due to the Prisma HTML markup transformation (style code snippets)
     this.timerSubscription = timer(600, 200)
@@ -147,7 +159,8 @@ export class TocComponent implements OnInit, OnDestroy, OnChanges {
   }
 
   currentURL(): string {
-    return window.location.href.split('#')[0];
+    const { pathname, search } = this.platformLocation;
+    return pathname + search;
   }
 
   checkViewportBoundaries() {

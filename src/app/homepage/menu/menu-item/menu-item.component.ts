@@ -1,6 +1,8 @@
 import { ChangeDetectionStrategy, Component, Input } from '@angular/core';
 import { openCloseAnimation } from '../../../common';
+import { NavItem } from '../../../shared/nav/nav-items';
 import { RouterLinkActive, RouterLink } from '@angular/router';
+import { NewBadgeComponent } from '../../../shared/components/new-badge/new-badge.component';
 
 @Component({
   selector: 'app-menu-item',
@@ -9,14 +11,11 @@ import { RouterLinkActive, RouterLink } from '@angular/router';
   changeDetection: ChangeDetectionStrategy.OnPush,
   animations: [openCloseAnimation],
   standalone: true,
-  imports: [
-    RouterLinkActive,
-    RouterLink
-  ],
+  imports: [RouterLinkActive, RouterLink, NewBadgeComponent],
 })
 export class MenuItemComponent {
   @Input() isOpen = false;
-  @Input() children = [];
+  @Input() children: NavItem[] = [];
   @Input() path: string;
   @Input() title: string;
   @Input() icon: string;

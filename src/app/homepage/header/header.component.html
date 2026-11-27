@@ -2,7 +2,7 @@
   <a href="https://supportukrainenow.org/">STOP WAR IN UKRAINE 🇺🇦</a>
 </div> -->
 <header>
-  <button class="icon-wrapper" (click)="toggle.emit()" [class.opened]="isSidebarOpened">
+  <button class="icon-wrapper" (click)="sidebarToggle.emit()" [class.opened]="isSidebarOpened">
     <div class="nav-icon">
       <div class="mobile-nav-icon">
         <span></span>
@@ -44,9 +44,9 @@
           title="Enterprise | NestJS - A node.js framework built on top of TypeScript">Enterprise</a>
       </li>
       <li>
-        <a href="https://devtools.nestjs.com" target="_blank"
-          title="Devtools | NestJS - A node.js framework built on top of TypeScript">
-          <span class="new">NEW</span> Devtools</a>
+        <a href="https://observe.nestjs.com" target="_blank"
+          title="Observe | NestJS - A node.js framework built on top of TypeScript">
+          <app-new-badge /> Observe</a>
       </li>
       <li>
         <a href="https://mau.nestjs.com" target="_blank"

@@ -1,3 +1,4 @@
+import { isPlatformBrowser } from '@angular/common';
 import {
   AfterViewInit,
   ChangeDetectionStrategy,
@@ -5,12 +6,19 @@ import {
   Component,
   ElementRef,
   HostListener,
+  inject,
   OnDestroy,
   OnInit,
+  PLATFORM_ID,
   Renderer2,
   ViewEncapsulation,
 } from '@angular/core';
-import { NavigationEnd, Router, RouterOutlet, RouterLink } from '@angular/router';
+import {
+  NavigationEnd,
+  Router,
+  RouterOutlet,
+  RouterLink,
+} from '@angular/router';
 import { fromEvent, Subscription } from 'rxjs';
 import { debounceTime, filter } from 'rxjs/operators';
 import { environment } from '../../environments/environment';
@@ -20,8 +28,26 @@ import { MenuComponent } from './menu/menu.component';
 import { TocComponent } from '../shared/components/toc/toc.component';
 import { NewsletterComponent } from './newsletter/newsletter.component';
 import { FooterComponent } from './footer/footer.component';
+import { PageNavComponent } from '../shared/components/page-nav/page-nav.component';
+import { CopyMarkdownComponent } from '../shared/components/copy-markdown/copy-markdown.component';
 
 const CARBON_WIDTH_BREAKPOINT = 1200;
+
+// Matches the archived documentation kept under /v4, /v5, ... /v11.
+const ARCHIVED_VERSION_PATH = /^\/v\d+(?:\/|$)/;
+
+function isArchivedVersionUrl(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    return ARCHIVED_VERSION_PATH.test(
+      new URL(url, window.location.origin).pathname,
+    );
+  } catch {
+    return false;
+  }
+}
 
 @Component({
   selector: 'app-homepage',
@@ -38,24 +64,32 @@ const CARBON_WIDTH_BREAKPOINT = 1200;
     RouterLink,
     NewsletterComponent,
     FooterComponent,
+    PageNavComponent,
+    CopyMarkdownComponent,
   ],
 })
 export class HomepageComponent implements OnInit, OnDestroy, AfterViewInit {
+  private readonly cd = inject(ChangeDetectorRef);
+  private readonly router = inject(Router);
+  private readonly elementRef = inject(ElementRef);
+  private readonly renderer = inject(Renderer2);
+  // Pages are also prerendered at build time, where there is no window to
+  // measure, no ads to load and no search to wire up.
+  protected readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
+
   public isSidebarOpened = true;
   public previousWidth: number;
   public contentRef: HTMLElement;
   public isMarkupReady: boolean;
+  public routeAnnouncement = '';
   private scrollSubscription: Subscription;
+  private isInitialRoute = true;
   private readonly scrollDebounceTime = 100;
 
-  constructor(
-    private readonly cd: ChangeDetectorRef,
-    private readonly router: Router,
-    private readonly elementRef: ElementRef,
-    private readonly renderer: Renderer2,
-  ) {}
-
   public ngOnInit(): void {
+    if (!this.isBrowser) {
+      return;
+    }
     this.router.events
       .pipe(filter((ev) => ev instanceof NavigationEnd))
       .subscribe(() => {
@@ -74,6 +108,9 @@ export class HomepageComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   public ngAfterViewInit(): void {
+    if (!this.isBrowser) {
+      return;
+    }
     this.checkWindowWidth(window.innerWidth);
     if (this.contentRef) {
       this.contentRef.appendChild(this.createDocSearchScriptTag());
@@ -98,9 +135,20 @@ export class HomepageComponent implements OnInit, OnDestroy, AfterViewInit {
 
   public checkWindowWidth(innerWidth?: number): void {
     innerWidth = innerWidth ? innerWidth : window.innerWidth;
-    if (this.previousWidth !== innerWidth && innerWidth <= 768) {
-      this.previousWidth = innerWidth;
+    if (this.previousWidth === innerWidth) {
+      return;
+    }
+    const wasMobile =
+      this.previousWidth !== undefined && this.previousWidth <= 768;
+    this.previousWidth = innerWidth;
+    if (innerWidth <= 768) {
       this.isSidebarOpened = false;
+      this.cd.detectChanges();
+    } else if (wasMobile || (innerWidth > 1200 && !this.isSidebarOpened)) {
+      // Re-open the sidebar when growing back past the mobile breakpoint, and
+      // force it open above 1200px where the hamburger is hidden and the
+      // sidebar is not toggleable.
+      this.isSidebarOpened = true;
       this.cd.detectChanges();
     }
   }
@@ -151,6 +199,10 @@ export class HomepageComponent implements OnInit, OnDestroy, AfterViewInit {
     }
 
     this.contentRef = nativeElement.querySelector('.content');
+    if (!this.isBrowser) {
+      this.cd.markForCheck();
+      return;
+    }
     if (this.contentRef && !this.contentRef.querySelector('.carbon-wrapper')) {
       const scriptTag = this.createCarbonScriptTag();
       const carbonWrapper = document.createElement('div');
@@ -164,11 +216,45 @@ export class HomepageComponent implements OnInit, OnDestroy, AfterViewInit {
       this.contentRef.prepend(carbonWrapper);
     }
 
+    // The pager lives outside the router outlet, so the link the reader just
+    // activated survives the navigation and keeps focus at the bottom of the new
+    // page. Move focus into the article instead, and say where we landed.
+    if (this.isInitialRoute) {
+      this.isInitialRoute = false;
+    } else {
+      this.focusContent();
+      this.routeAnnouncement = this.readPageTitle();
+    }
+
     this.cd.markForCheck();
 
     // Schedule check as TOC might not be rendered yet
     const adOverlapCheckDelay = 300;
     setTimeout(() => this.hideAdIfTocOverflow(), adOverlapCheckDelay);
+  }
+
+  public skipToContent(event: Event): void {
+    event.preventDefault();
+    this.focusContent({ preventScroll: false });
+  }
+
+  /**
+   * Focus lands on `.content` rather than the <main> wrapper: <main> is
+   * `display: contents` so it has no box of its own to scroll to.
+   * `scrollPositionRestoration` has already put us at the top of the page, so
+   * focusing must not scroll again.
+   */
+  private focusContent(options: FocusOptions = { preventScroll: true }): void {
+    if (!this.contentRef) {
+      return;
+    }
+    this.renderer.setAttribute(this.contentRef, 'tabindex', '-1');
+    this.contentRef.focus(options);
+  }
+
+  private readPageTitle(): string {
+    const heading = this.contentRef?.querySelector('h3');
+    return heading?.textContent?.trim() || document.title;
   }
 
   public createCarbonScriptTag(): HTMLScriptElement {
@@ -192,6 +278,34 @@ export class HomepageComponent implements OnInit, OnDestroy, AfterViewInit {
         container: '#search',
         appId: 'SDCBYAN96J',
         debug: false,
+        // The Algolia index also covers the archived documentation (/v4 ... /v11),
+        // and those records tend to crowd out the current ones. They are dropped
+        // straight from the response - `transformItems` runs only after DocSearch
+        // has grouped and truncated the hits, which would be too late. A larger
+        // page of hits is requested to compensate for the ones removed - roughly
+        // one record in six belongs to the current version, so 20 (the DocSearch
+        // default) would leave barely a handful of results.
+        searchParameters: {
+          hitsPerPage: 150,
+        },
+        transformSearchClient: (searchClient: any) => ({
+          ...searchClient,
+          search: (queries: unknown, ...rest: unknown[]) =>
+            searchClient
+              .search(queries, ...rest)
+              .then((response: { results?: any[] }) => ({
+                ...response,
+                results: (response.results ?? []).map((result) => {
+                  if (!Array.isArray(result?.hits)) {
+                    return result;
+                  }
+                  const hits = result.hits.filter(
+                    (hit: { url?: string }) => !isArchivedVersionUrl(hit.url),
+                  );
+                  return { ...result, hits, nbHits: hits.length };
+                }),
+              })),
+        }),
       });
     };
     return scriptTag;

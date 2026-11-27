@@ -3,8 +3,12 @@ import { ObservabilityOverviewComponent } from './overview/overview.component';
 import { ObservabilitySdkComponent } from './sdk/sdk.component';
 import { ObservabilityManualInstrumentationComponent } from './manual-instrumentation/manual-instrumentation.component';
 import { ObservabilityDistributedTracingComponent } from './distributed-tracing/distributed-tracing.component';
+import { ObservabilityErrorMonitoringComponent } from './error-monitoring/error-monitoring.component';
 import { ObservabilityDashboardComponent } from './dashboard/dashboard.component';
 import { ObservabilityMcpServerComponent } from './mcp-server/mcp-server.component';
+import { ObservabilityProductionRulesComponent } from './production-rules/production-rules.component';
+import { ObservabilityOpentelemetryComponent } from './opentelemetry/opentelemetry.component';
+import { ObservabilityChoosingAnApmComponent } from './choosing-an-apm/choosing-an-apm.component';
 
 export const OBSERVABILITY_ROUTES: Routes = [
   {
@@ -33,13 +37,33 @@ export const OBSERVABILITY_ROUTES: Routes = [
     data: { title: 'Observability - Distributed tracing' },
   },
   {
+    path: 'error-monitoring',
+    component: ObservabilityErrorMonitoringComponent,
+    data: { title: 'Observability - Error monitoring' },
+  },
+  {
     path: 'dashboard',
     component: ObservabilityDashboardComponent,
     data: { title: 'Observability - Dashboard' },
   },
   {
+    path: 'production-rules',
+    component: ObservabilityProductionRulesComponent,
+    data: { title: 'Observability - Production rules' },
+  },
+  {
     path: 'mcp-server',
     component: ObservabilityMcpServerComponent,
     data: { title: 'Observability - MCP server' },
+  },
+  {
+    path: 'opentelemetry',
+    component: ObservabilityOpentelemetryComponent,
+    data: { title: 'Observability - OpenTelemetry' },
+  },
+  {
+    path: 'choosing-an-apm',
+    component: ObservabilityChoosingAnApmComponent,
+    data: { title: 'Observability - Choosing an APM for NestJS' },
   },
 ];

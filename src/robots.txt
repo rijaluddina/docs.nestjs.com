@@ -1,0 +1,24 @@
+# https://docs.nestjs.com
+
+User-agent: *
+Allow: /
+
+# Archived documentation for previous major versions. It is kept online so that
+# existing links keep working, but it should not be crawled: those pages used to
+# flood the Algolia index (and search results) with records that no longer apply
+# to the current version. See https://github.com/nestjs/docs.nestjs.com/issues/3516
+Disallow: /v4
+Disallow: /v5
+Disallow: /v6
+Disallow: /v7
+Disallow: /v8
+Disallow: /v9
+Disallow: /v10
+Disallow: /v11
+
+# Every chapter's URL, generated with llms.txt by tools/generate-llms-txt.ts.
+Sitemap: https://docs.nestjs.com/sitemap.xml
+
+# The machine-readable index for language models (https://llmstxt.org) is at
+# https://docs.nestjs.com/llms.txt. It is markdown, not a sitemap: it links every
+# chapter's plain-markdown copy, the chapter without the site around it.

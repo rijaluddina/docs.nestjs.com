@@ -1,9 +1,17 @@
+import { isPlatformBrowser, PlatformLocation } from '@angular/common';
 import {
   AfterViewChecked,
+  AfterViewInit,
   ApplicationRef,
   Component,
   ElementRef,
+  ChangeDetectionStrategy,
+  inject,
+  Injectable,
+  PLATFORM_ID,
+  Renderer2,
 } from '@angular/core';
+import { Meta } from '@angular/platform-browser';
 import * as Prism from 'prismjs';
 import 'prismjs/prism';
 import 'prismjs/components/prism-typescript';
@@ -11,19 +19,77 @@ import 'prismjs/components/prism-graphql';
 import 'prismjs/components/prism-json';
 import 'prismjs/components/prism-yaml';
 import 'prismjs/components/prism-bash';
+import 'prismjs/components/prism-java';
+import 'prismjs/components/prism-csharp';
+
+/** Roughly what a search result shows before it cuts the snippet off. */
+const DESCRIPTION_MAX_LENGTH = 160;
+
+/**
+ * Whole sentences from the start of `text` that fit the limit, or the first
+ * sentence cut at a word boundary when even that one is too long.
+ *
+ * A sentence ends at punctuation followed by whitespace - the rule llms.txt
+ * uses - so the dots in "Node.js" or "e.g.," do not split one.
+ */
+function summarize(text: string): string {
+  if (text.length <= DESCRIPTION_MAX_LENGTH) {
+    return text;
+  }
+  let summary = '';
+  let rest = text;
+  while (rest) {
+    const sentence = rest.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? rest;
+    const candidate = summary ? `${summary} ${sentence}` : sentence;
+    if (candidate.length > DESCRIPTION_MAX_LENGTH) {
+      break;
+    }
+    summary = candidate;
+    rest = rest.slice(sentence.length).trimStart();
+  }
+  return (
+    summary ||
+    text.slice(0, DESCRIPTION_MAX_LENGTH - 1).replace(/\s+\S*$/, '') + '…'
+  );
+}
+
+/**
+ * Whether the app has rendered a page yet. One per app, so prerendering, which
+ * starts an app per page, renders each page as the first.
+ */
+@Injectable({ providedIn: 'root' })
+class FirstPageTracker {
+  rendered = false;
+}
 
 @Component({
     selector: 'app-base-page',
     template: ``,
+    changeDetection: ChangeDetectionStrategy.OnPush,
     standalone: true,
 })
-export class BasePageComponent implements AfterViewChecked {
-  private isHljsInitialized = false;
+export class BasePageComponent implements AfterViewChecked, AfterViewInit {
+  private readonly applicationRef = inject(ApplicationRef);
+  private readonly el = inject(ElementRef);
+  private readonly platformLocation = inject(PlatformLocation);
+  private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
 
-  constructor(
-    private readonly applicationRef: ApplicationRef,
-    private readonly el: ElementRef,
-  ) {}
+  private isHljsInitialized = false;
+  private readonly metaService = inject(Meta);
+
+  constructor() {
+    // The first page of a visit is prerendered: it is on screen before the app
+    // starts, and the app then renders it again. The page-enter animation
+    // (src/styles.scss) would play on both, the second restarting the first
+    // mid-way, so the first page skips it and only navigations animate.
+    // (Router.navigated can't tell: the first navigation has ended by the time
+    // the root component, and so this page, is created.)
+    const firstPage = inject(FirstPageTracker);
+    if (!firstPage.rendered) {
+      firstPage.rendered = true;
+      inject(Renderer2).addClass(this.el.nativeElement, 'initial-page');
+    }
+  }
 
   get nativeElement(): HTMLElement {
     return this.el.nativeElement;
@@ -33,8 +99,46 @@ export class BasePageComponent implements AfterViewChecked {
     return this.isHljsInitialized;
   }
 
+  ngAfterViewInit() {
+    this.updateDescription();
+    this.resolveFragmentLinks();
+  }
+
+  /**
+   * Markdown links such as `[Foo](#foo)` render as `href="#foo"`, which the
+   * browser resolves against `<base href="/">` and so sends readers to the
+   * home page. Prefixing the current path keeps them on the page, the same way
+   * heading anchors build their links.
+   */
+  private resolveFragmentLinks() {
+    const path = this.platformLocation.pathname;
+    const links = this.nativeElement.querySelectorAll<HTMLAnchorElement>(
+      'a[href^="#"]',
+    );
+    links.forEach((link) => {
+      link.setAttribute('href', path + link.getAttribute('href'));
+    });
+  }
+
   ngAfterViewChecked() {
     this.initHljs();
+  }
+
+  /**
+   * index.html carries one generic description for the whole site. Every
+   * chapter opens with a paragraph written as its summary, so that paragraph
+   * becomes the page's description - the same source llms.txt uses.
+   */
+  private updateDescription() {
+    const paragraph = this.nativeElement.querySelector('.content-inner > p');
+    const text = paragraph?.textContent?.replace(/\s+/g, ' ').trim();
+    if (!text) {
+      return;
+    }
+    const content = summarize(text);
+    this.metaService.updateTag({ name: 'description', content });
+    this.metaService.updateTag({ property: 'og:description', content });
+    this.metaService.updateTag({ name: 'twitter:description', content });
   }
 
   private initHljs() {
@@ -48,6 +152,10 @@ export class BasePageComponent implements AfterViewChecked {
         this.isHljsInitialized = true;
       }
     });
-    setTimeout(() => this.applicationRef.tick(), 1000);
+    // A prerendered page is written once the app is stable, so this delay
+    // would hold up every page of the build by a second.
+    if (this.isBrowser) {
+      setTimeout(() => this.applicationRef.tick(), 1000);
+    }
   }
 }

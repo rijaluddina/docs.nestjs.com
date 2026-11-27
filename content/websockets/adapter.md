@@ -1,11 +1,11 @@
 ### Adapters
 
-The WebSockets module is platform-agnostic, hence, you can bring your own library (or even a native implementation) by making use of `WebSocketAdapter` interface. This interface forces to implement few methods described in the following table:
+The WebSockets module is platform-agnostic, so you can bring your own library (or even a native implementation) by implementing the `WebSocketAdapter` interface. The interface requires the methods described in the following table:
 
 <table>
   <tr>
     <td><code>create</code></td>
-    <td>Creates a socket instance based on passed arguments</td>
+    <td>Creates a socket server instance based on the passed arguments</td>
   </tr>
   <tr>
     <td><code>bindClientConnect</code></td>
@@ -13,7 +13,7 @@ The WebSockets module is platform-agnostic, hence, you can bring your own librar
   </tr>
   <tr>
     <td><code>bindClientDisconnect</code></td>
-    <td>Binds the client disconnection event (optional*)</td>
+    <td>Binds the client disconnection event (optional)</td>
   </tr>
   <tr>
     <td><code>bindMessageHandlers</code></td>
@@ -27,15 +27,15 @@ The WebSockets module is platform-agnostic, hence, you can bring your own librar
 
 #### Extend socket.io
 
-The [socket.io](https://github.com/socketio/socket.io) package is wrapped in an `IoAdapter` class. What if you would like to enhance the basic functionality of the adapter? For instance, your technical requirements require a capability to broadcast events across multiple load-balanced instances of your web service. For this, you can extend `IoAdapter` and override a single method which responsibility is to instantiate new socket.io servers. But first of all, let's install the required package.
+The [socket.io](https://github.com/socketio/socket.io) package is wrapped in an `IoAdapter` class. You can extend this class to enhance the adapter's basic functionality. For example, suppose your application must broadcast events across multiple load-balanced instances of your web service. To support this, extend `IoAdapter` and override the single method responsible for instantiating new socket.io servers. First, install the required packages.
 
-> warning **Warning** To use socket.io with multiple load-balanced instances you either have to disable polling by setting `transports: ['websocket']` in your clients socket.io configuration or you have to enable cookie based routing in your load balancer. Redis alone is not enough. See [here](https://socket.io/docs/v4/using-multiple-nodes/#enabling-sticky-session) for more information.
+> warning **Warning** To use socket.io with multiple load-balanced instances, you must either disable polling by setting `transports: ['websocket']` in your clients' socket.io configuration, or enable cookie-based routing (sticky sessions) in your load balancer. Redis alone is not enough. See [Enabling sticky session](https://socket.io/docs/v4/using-multiple-nodes/#enabling-sticky-session) in the socket.io documentation for more information.
 
 ```bash
 $ npm i --save redis socket.io @socket.io/redis-adapter
 ```
 
-Once the package is installed, we can create a `RedisIoAdapter` class.
+Once the packages are installed, create a `RedisIoAdapter` class.
 
 ```typescript
 import { IoAdapter } from '@nestjs/platform-socket.io';
@@ -63,7 +63,7 @@ export class RedisIoAdapter extends IoAdapter {
 }
 ```
 
-Afterward, simply switch to your newly created Redis adapter.
+Then switch to your newly created Redis adapter.
 
 ```typescript
 const app = await NestFactory.create(AppModule);
@@ -75,17 +75,17 @@ app.useWebSocketAdapter(redisIoAdapter);
 
 #### Ws library
 
-Another available adapter is a `WsAdapter` which in turn acts like a proxy between the framework and integrate blazing fast and thoroughly tested [ws](https://github.com/websockets/ws) library. This adapter is fully compatible with native browser WebSockets and is far faster than socket.io package. Unluckily, it has significantly fewer functionalities available out-of-the-box. In some cases, you don't necessarily need them though.
+Another available adapter is `WsAdapter`, which acts as a proxy between the framework and the fast, thoroughly tested [ws](https://github.com/websockets/ws) library. This adapter is fully compatible with native browser WebSockets and is faster than the socket.io package. However, it offers significantly fewer features out of the box, which many applications don't need.
 
-> info **Hint** `ws` library does not support namespaces (communication channels popularised by `socket.io`). However, to somehow mimic this feature, you can mount multiple `ws` servers on different paths (example: `@WebSocketGateway({{ '{' }} path: '/users' {{ '}' }})`).
+> info **Hint** The `ws` library doesn't support namespaces (communication channels popularized by `socket.io`), and `WsAdapter` throws an error if you set the `namespace` option. To mimic this feature, mount multiple `ws` servers on different paths (e.g., `@WebSocketGateway({{ '{' }} path: '/users' {{ '}' }})`).
 
-In order to use `ws`, we firstly have to install the required package:
+To use `ws`, first install the required package:
 
 ```bash
 $ npm i --save @nestjs/platform-ws
 ```
 
-Once the package is installed, we can switch an adapter:
+Once the package is installed, switch the adapter:
 
 ```typescript
 const app = await NestFactory.create(AppModule);
@@ -94,7 +94,7 @@ app.useWebSocketAdapter(new WsAdapter(app));
 
 > info **Hint** The `WsAdapter` is imported from `@nestjs/platform-ws`.
 
-The `wsAdapter` is designed to handle messages in the `{{ '{' }} event: string, data: any {{ '}' }}` format. If you need to receive and process messages in a different format, you'll need to configure a message parser to convert them into this required format.
+The `WsAdapter` handles messages in the `{{ '{' }} event: string, data: any {{ '}' }}` format. To receive and process messages in a different format, configure a message parser that converts them into this format.
 
 ```typescript
 const wsAdapter = new WsAdapter(app, {
@@ -106,15 +106,70 @@ const wsAdapter = new WsAdapter(app, {
 });
 ```
 
-Alternatively, you can configure the message parser after the adapter is created by using the `setMessageParser` method.
+Alternatively, you can set the message parser after creating the adapter with the `setMessageParser()` method.
+
+When the gateways share the application's HTTP server, other `upgrade` listeners can serve their own paths on that server, for example [GraphQL subscriptions](/graphql/subscriptions). The `WsAdapter` leaves an upgrade request for a path that none of its gateways serves to those listeners, and closes the connection if none of them has answered the handshake within a second. When it is the only `upgrade` listener, it closes such a request right away. If another listener answers late, for example after authenticating the request, raise the delay with the `unclaimedUpgradeTimeout` option (in milliseconds), or set it to `0` to leave such connections to the other listeners. A value that isn't a number, such as the `NaN` that `Number()` makes of an unset environment variable, gets the default. To wait five seconds:
+
+```typescript
+const wsAdapter = new WsAdapter(app, {
+  unclaimedUpgradeTimeout: 5000,
+});
+```
+
+When the application closes (`app.close()`, or a system signal once [shutdown hooks](/fundamentals/lifecycle-events#application-shutdown) are enabled), the `WsAdapter` disconnects every client at once, so the replies to messages still being handled are lost.
+
+With the `gracefulShutdown` option, it lets that work finish first. It stops taking new connections (an upgrade request to a gateway on the application's HTTP server gets a `503` response) and new messages from connected clients. Once the messages a client sent have been handled and their replies sent, it closes the client's connection with the close code `1001` ("Going Away"). The `gracePeriod` option sets the longest time this may take, in milliseconds (default: `10000`); clients still connected after that are disconnected, and a warning is logged. A handler that returns a stream which never completes is still being handled, so its client is only disconnected then.
+
+```typescript
+app.useWebSocketAdapter(
+  new WsAdapter(app, {
+    gracefulShutdown: true,
+    gracePeriod: 30000,
+  }),
+);
+```
+
+> info **Hint** In an application created with `NestFactory.create()`, the gateways close after the `onModuleDestroy()` and `beforeApplicationShutdown()` hooks have run, and before `onApplicationShutdown()` is called. Release what the message handlers use, such as a database connection, in `onApplicationShutdown()`.
+
+#### Limits
+
+Both built-in adapters limit how many messages of a client are handled at the same time, 1000 by default: the `IoAdapter` counts each event separately, the `WsAdapter` all of a client's messages together. Later messages wait for their turn. Change the limit with the `maxConcurrentMessages` option, or set it to `Infinity` to lift it (with `0`, no message is handled).
+
+The `IoAdapter` also limits the messages that wait: a client with more than 10000 messages of one event waiting is disconnected, and a warning is logged. Change this with the `maxWaitingMessages` option, or set it to `Infinity` to lift it.
+
+```typescript
+app.useWebSocketAdapter(
+  new IoAdapter(app, {
+    maxConcurrentMessages: 100,
+    maxWaitingMessages: 1000,
+  }),
+);
+```
+
+The `WsAdapter` takes two more limits:
+
+- `maxPayload`: the largest message, in bytes, that a client may send (default: 1 MiB; before NestJS v12.5, the `ws` default of 100 MiB applied). A client that sends a larger one is disconnected with the close code `1009`. The `maxPayload` option of a gateway takes precedence. Set it to `0` to lift the limit.
+- `maxSendBufferSize`: how many bytes may be queued for a client that doesn't read what it is sent before it is disconnected (default: 128 MiB). Set it to `0` to lift the limit.
+
+```typescript
+app.useWebSocketAdapter(
+  new WsAdapter(app, {
+    maxPayload: 10 * 1024 * 1024,
+  }),
+);
+```
+
+A limit that isn't a number, such as the `NaN` that `Number()` makes of an unset environment variable, gets its default.
+
+The `IoAdapter`, and so any class that extends it, also disconnects a client whose message refers to the same binary value (a `Buffer`, an `ArrayBuffer` or a view of one, or a `Blob`) more than once, and logs a warning. Socket.IO clients don't send such messages.
 
 #### Advanced (custom adapter)
 
-For demonstration purposes, we are going to integrate the [ws](https://github.com/websockets/ws) library manually. As mentioned, the adapter for this library is already created and is exposed from the `@nestjs/platform-ws` package as a `WsAdapter` class. Here is how the simplified implementation could potentially look like:
+For demonstration purposes, we'll integrate the [ws](https://github.com/websockets/ws) library manually. As mentioned, an adapter for this library already exists: the `WsAdapter` class exposed from the `@nestjs/platform-ws` package. A simplified implementation could look like this:
 
 ```typescript
 @@filename(ws-adapter)
-import * as WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 import { WebSocketAdapter, INestApplicationContext } from '@nestjs/common';
 import { MessageMappingProperties } from '@nestjs/websockets';
 import { Observable, fromEvent, EMPTY } from 'rxjs';
@@ -124,10 +179,10 @@ export class WsAdapter implements WebSocketAdapter {
   constructor(private app: INestApplicationContext) {}
 
   create(port: number, options: any = {}): any {
-    return new WebSocket.Server({ port, ...options });
+    return new WebSocketServer({ port, ...options });
   }
 
-  bindClientConnect(server, callback: Function) {
+  bindClientConnect(server: WebSocketServer, callback: (...args: any[]) => void) {
     server.on('connection', callback);
   }
 
@@ -145,7 +200,7 @@ export class WsAdapter implements WebSocketAdapter {
   }
 
   bindMessageHandler(
-    buffer,
+    buffer: any,
     handlers: MessageMappingProperties[],
     process: (data: any) => Observable<any>,
   ): Observable<any> {
@@ -159,15 +214,15 @@ export class WsAdapter implements WebSocketAdapter {
     return process(messageHandler.callback(message.data));
   }
 
-  close(server) {
+  close(server: WebSocketServer) {
     server.close();
   }
 }
 ```
 
-> info **Hint** When you want to take advantage of [ws](https://github.com/websockets/ws) library, use built-in `WsAdapter` instead of creating your own one.
+> info **Hint** To use the [ws](https://github.com/websockets/ws) library, use the built-in `WsAdapter` instead of creating your own.
 
-Then, we can set up a custom adapter using `useWebSocketAdapter()` method:
+Then set up the custom adapter with the `useWebSocketAdapter()` method:
 
 ```typescript
 @@filename(main)
@@ -177,4 +232,4 @@ app.useWebSocketAdapter(new WsAdapter(app));
 
 #### Example
 
-A working example that uses `WsAdapter` is available [here](https://github.com/nestjs/nest/tree/master/sample/16-gateways-ws).
+A working example that uses `WsAdapter` is available in the [16-gateways-ws sample](https://github.com/nestjs/nest/tree/master/sample/16-gateways-ws).

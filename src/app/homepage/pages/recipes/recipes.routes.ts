@@ -1,75 +1,45 @@
 import { Routes } from '@angular/router';
 import { CqrsComponent } from './cqrs/cqrs.component';
 import { CrudGeneratorComponent } from './crud-generator/crud-generator.component';
-import { DocumentationComponent } from './documentation/documentation.component';
 import { HotReloadComponent } from './hot-reload/hot-reload.component';
-import { MikroOrmComponent } from './mikroorm/mikroorm.component';
-import { MongodbComponent } from './mongodb/mongodb.component';
-import { PrismaComponent } from './prisma/prisma.component';
 import { ReplComponent } from './repl/repl.component';
-import { SentryComponent } from './sentry/sentry.component';
 import { ServeStaticComponent } from './serve-static/serve-static.component';
-import { SqlSequelizeComponent } from './sql-sequelize/sql-sequelize.component';
-import { SqlTypeormComponent } from './sql-typeorm/sql-typeorm.component';
-import { TerminusComponent } from './terminus/terminus.component';
+import { NextjsComponent } from './nextjs/nextjs.component';
 import { RouterModuleComponent } from './router-module/router-module.component';
+import { SupabaseComponent } from './supabase/supabase.component';
 import { NestCommanderComponent } from './nest-commander/nest-commander.component';
 import { AsyncLocalStorageComponent } from './async-local-storage/async-local-storage.component';
-import { SuitesComponent } from './suites/suites.component';
 import { SwcComponent } from './swc/swc.component';
-import { NecordComponent } from './necord/necord.component';
 import { PassportComponent } from './passport/passport.component';
+import { SocketActivationComponent } from './socket-activation/socket-activation.component';
+import { movedTo, splitInto } from '../../../shared/utils/moved-page-redirect';
+import { PRISMA_SECTIONS } from '../data/prisma-sections';
 
 export const RECIPES_ROUTES: Routes = [
-  {
-    path: 'mikroorm',
-    component: MikroOrmComponent,
-    data: { title: 'MikroORM' },
-  },
-  {
-    path: 'sql-typeorm',
-    component: SqlTypeormComponent,
-    data: { title: 'SQL (TypeORM)' },
-  },
-  {
-    path: 'mongodb',
-    component: MongodbComponent,
-    data: { title: 'MongoDB (Mongoose)' },
-  },
-  {
-    path: 'sql-sequelize',
-    component: SqlSequelizeComponent,
-    data: { title: 'SQL (Sequelize)' },
-  },
+  { path: 'mikroorm', redirectTo: movedTo('/data/mikroorm') },
   {
     path: 'cqrs',
     component: CqrsComponent,
     data: { title: 'CQRS' },
   },
   {
-    path: 'sentry',
-    component: SentryComponent,
-    data: { title: 'Sentry' },
-  },
-  {
     path: 'swagger',
     redirectTo: '/openapi/introduction',
   },
+  { path: 'prisma', redirectTo: splitInto('/data/prisma', PRISMA_SECTIONS) },
+  // A plain redirect: the old recipe's fragments have no match on the new page
+  { path: 'sentry', redirectTo: '/observability/error-monitoring' },
+  { path: 'terminus', redirectTo: movedTo('/reliability/terminus') },
   {
-    path: 'prisma',
-    component: PrismaComponent,
-    data: { title: 'Prisma' },
+    path: 'express-migration',
+    redirectTo: movedTo('/migrating/express'),
   },
   {
-    path: 'terminus',
-    component: TerminusComponent,
-    data: { title: 'Health checks (Terminus)' },
+    path: 'fastify-migration',
+    redirectTo: movedTo('/migrating/fastify'),
   },
-  {
-    path: 'documentation',
-    component: DocumentationComponent,
-    data: { title: 'Documentation (Compodoc)' },
-  },
+  { path: 'spring-boot', redirectTo: movedTo('/migrating/spring-boot') },
+  { path: 'aspnet-core', redirectTo: movedTo('/migrating/aspnet-core') },
   {
     path: 'crud-utilities',
     redirectTo: '/recipes/crud-generator',
@@ -94,9 +64,19 @@ export const RECIPES_ROUTES: Routes = [
     data: { title: 'Serve static' },
   },
   {
+    path: 'nextjs',
+    component: NextjsComponent,
+    data: { title: 'Next.js' },
+  },
+  {
     path: 'router-module',
     component: RouterModuleComponent,
     data: { title: 'Router module' },
+  },
+  {
+    path: 'supabase',
+    component: SupabaseComponent,
+    data: { title: 'Supabase' },
   },
   {
     path: 'nest-commander',
@@ -119,22 +99,13 @@ export const RECIPES_ROUTES: Routes = [
     data: { title: 'SWC (fast compiler)' },
   },
   {
-    path: 'automock',
-    redirectTo: '/recipes/suites',
-  },
-  {
-    path: 'suites',
-    component: SuitesComponent,
-    data: { title: 'Suites (Automock)' },
-  },
-  {
-    path: 'necord',
-    component: NecordComponent,
-    data: { title: 'Necord' },
-  },
-  {
     path: 'passport',
     component: PassportComponent,
     data: { title: 'passport' },
+  },
+  {
+    path: 'socket-activation',
+    component: SocketActivationComponent,
+    data: { title: 'Socket activation' },
   },
 ];

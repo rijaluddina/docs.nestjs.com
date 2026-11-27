@@ -1,29 +1,45 @@
 ### First steps
 
-In this set of articles, you'll learn the **core fundamentals** of Nest. To get familiar with the essential building blocks of Nest applications, we'll build a basic CRUD application with features that cover a lot of ground at an introductory level.
+This set of articles covers the **core fundamentals** of Nest. To introduce the essential building blocks of a Nest application, we'll build a basic CRUD application whose features cover a lot of ground at an introductory level.
 
 #### Language
 
-We're in love with [TypeScript](https://www.typescriptlang.org/), but above all - we love [Node.js](https://nodejs.org/en/). That's why Nest is compatible with both TypeScript and pure JavaScript. Nest takes advantage of the latest language features, so to use it with vanilla JavaScript we need a [Babel](https://babeljs.io/) compiler.
+Nest is written in [TypeScript](https://www.typescriptlang.org/) and runs on [Node.js](https://nodejs.org/en/), and it supports both TypeScript and plain JavaScript. Because Nest relies on the latest language features, using it with plain JavaScript requires [Babel](https://babeljs.io/).
 
-We'll mostly use TypeScript in the examples we provide, but you can always **switch the code snippets** to vanilla JavaScript syntax (simply click to toggle the language button in the upper right hand corner of each snippet).
+Most examples in this documentation use TypeScript, but you can **switch any code snippet** to plain JavaScript syntax with the language toggle in the upper-right corner of the snippet.
 
 #### Prerequisites
 
-Please make sure that [Node.js](https://nodejs.org) (version >= 20) is installed on your operating system.
+Make sure that [Node.js](https://nodejs.org) is installed on your operating system. Running a Nest application requires **v20.19 or later** (or **v22.12+** on the 22.x line). The Nest CLI's generators (such as `nest new` and `nest generate`) require **v22.22.3+, v24.15+, or v26+**. We recommend the latest active LTS release, which satisfies both requirements.
 
 #### Setup
 
-Setting up a new project is quite simple with the [Nest CLI](/cli/overview). With [npm](https://www.npmjs.com/) installed, you can create a new Nest project with the following commands in your OS terminal:
+The quickest way to set up a new project is with the [Nest CLI](/cli/overview). With [npm](https://www.npmjs.com/) installed, run the following commands in your terminal:
 
 ```bash
 $ npm i -g @nestjs/cli
 $ nest new project-name
 ```
 
-> info **Hint** To create a new project with TypeScript's [stricter](https://www.typescriptlang.org/tsconfig#strict) feature set, pass the `--strict` flag to the `nest new` command.
+The CLI asks which module system to use: ESM (the default), which uses Vitest as the test runner, or CommonJS, which uses Jest. Pass `--type esm` or `--type cjs` to choose without being asked.
 
-The `project-name` directory will be created, node modules and a few other boilerplate files will be installed, and a `src/` directory will be created and populated with several core files.
+It also asks whether to set up [NestJS Observe](https://www.observe.nestjs.com/ 'NestJS Observe'), the official observability platform for Nest. If you answer yes, the generated project includes the `@nestjs/observe` SDK, already wired into `AppModule` and `NestFactory.create()`. In an interactive terminal, the prompt defaults to yes; without one, such as in CI or a coding agent's shell, it is skipped and Observe is added, sending nothing until you link the project. Pass `--observe` or `--no-observe` to skip the prompt either way. See the [Observability](/observability/overview) chapter for what Observe covers.
+
+If you set up Observe, the CLI then offers to link the new project to it, once the dependencies are installed. Accepting prints a code to approve at [observe.nestjs.com/link](https://www.observe.nestjs.com/link 'Link a project to NestJS Observe') (signing up first if you don't have an account; the free plan needs no payment details), and the CLI then writes the app key and secret into `.env` and makes every `nest start` script (`start`, `start:dev`, and `start:debug`) load it. Requests, background jobs, errors, and distributed traces start reporting the next time you start the application. To link later, or when the CLI doesn't offer it (without a terminal, or with `--skip-install`), run `npx @nestjs/observe link` in the project directory - see [Linking from the terminal](/observability/sdk#linking-from-the-terminal).
+
+It also asks which coding agents should get the official NestJS agent skills (all of them by default). See [Coding agents](/first-steps#coding-agents).
+
+To create the project in the current folder instead, from a script or a coding agent's shell, run:
+
+```bash
+$ npx @nestjs/cli new . --skip-git --package-manager npm
+```
+
+Without a terminal, the CLI asks nothing and uses the defaults described above: ESM, Observe, and the agent skills for Codex, Cursor and Claude Code.
+
+> info **Hint** New projects are generated with TypeScript's [strict](https://www.typescriptlang.org/tsconfig#strict) mode enabled. To opt out, set `"strict": false` in the generated `tsconfig.json`.
+
+The CLI creates a `project-name` directory, installs the dependencies, generates a few boilerplate files, and populates a `src/` directory with several core files.
 
 <div class="file-tree">
   <div class="item">src</div>
@@ -36,99 +52,159 @@ The `project-name` directory will be created, node modules and a few other boile
   </div>
 </div>
 
-Here's a brief overview of those core files:
+The following table describes these core files:
 
-|                          |                                                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `app.controller.ts`      | A basic controller with a single route.                                                                             |
-| `app.controller.spec.ts` | The unit tests for the controller.                                                                                  |
-| `app.module.ts`          | The root module of the application.                                                                                 |
-| `app.service.ts`         | A basic service with a single method.                                                                               |
-| `main.ts`                | The entry file of the application which uses the core function `NestFactory` to create a Nest application instance. |
+|                          |                                                                                                 |
+| ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `app.controller.ts`      | A basic controller with a single route.                                                         |
+| `app.controller.spec.ts` | The unit tests for the controller.                                                              |
+| `app.module.ts`          | The root module of the application.                                                             |
+| `app.service.ts`         | A basic service with a single method.                                                           |
+| `main.ts`                | The entry file of the application. It uses `NestFactory` to create a Nest application instance. |
 
-The `main.ts` includes an async function, which will **bootstrap** our application:
+The `main.ts` file contains an async function that **bootstraps** the application:
 
 ```typescript
 @@filename(main)
 
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
+import { AppModule } from './app.module.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   await app.listen(process.env.PORT ?? 3000);
 }
-bootstrap();
+await bootstrap();
 @@switch
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
+import { AppModule } from './app.module.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   await app.listen(process.env.PORT ?? 3000);
 }
-bootstrap();
+await bootstrap();
 ```
 
-To create a Nest application instance, we use the core `NestFactory` class. `NestFactory` exposes a few static methods that allow creating an application instance. The `create()` method returns an application object, which fulfills the `INestApplication` interface. This object provides a set of methods which are described in the coming chapters. In the `main.ts` example above, we simply start up our HTTP listener, which lets the application await inbound HTTP requests.
+To create a Nest application instance, use `NestFactory` from `@nestjs/core`, which exposes a few methods for this purpose. The `create()` method returns an application object that implements the `INestApplication` interface. The methods of this object are described in the following chapters. In the `main.ts` example above, the application starts an HTTP listener and waits for inbound HTTP requests.
 
-Note that a project scaffolded with the Nest CLI creates an initial project structure that encourages developers to follow the convention of keeping each module in its own dedicated directory.
+The project structure generated by the Nest CLI encourages the convention of keeping each module in its own dedicated directory.
 
-> info **Hint** By default, if any error happens while creating the application your app will exit with the code `1`. If you want to make it throw an error instead disable the option `abortOnError` (e.g., `NestFactory.create(AppModule, {{ '{' }} abortOnError: false {{ '}' }})`).
+> info **Hint** By default, if an error occurs while the application is being created, the process exits with code `1`. To have the error thrown instead, disable the `abortOnError` option (e.g., `NestFactory.create(AppModule, {{ '{' }} abortOnError: false {{ '}' }})`).
 
 <app-banner-courses></app-banner-courses>
 
 #### Platform
 
-Nest aims to be a platform-agnostic framework. Platform independence makes it possible to create reusable logical parts that developers can take advantage of across several different types of applications. Technically, Nest is able to work with any Node HTTP framework once an adapter is created. There are two HTTP platforms supported out-of-the-box: [express](https://expressjs.com/) and [fastify](https://www.fastify.io). You can choose the one that best suits your needs.
+Nest is designed to be platform-agnostic. Platform independence lets you create reusable logical parts that can be used across several different types of applications. Nest can work with any Node.js HTTP framework once an adapter is created for it. Three HTTP platforms are supported out of the box: [Express](https://expressjs.com/), [Fastify](https://www.fastify.io), and the [`node:http`](https://nodejs.org/api/http.html) module built into Node.js. Choose the one that best suits your needs (see [HTTP adapters](/http/performance)).
 
-|                    |                                                                                                                                                                                                                                                                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `platform-express` | [Express](https://expressjs.com/) is a well-known minimalist web framework for node. It's a battle tested, production-ready library with lots of resources implemented by the community. The `@nestjs/platform-express` package is used by default. Many users are well served with Express, and need take no action to enable it. |
-| `platform-fastify` | [Fastify](https://www.fastify.io/) is a high performance and low overhead framework highly focused on providing maximum efficiency and speed. Read how to use it [here](/techniques/performance).                                                                                                                                  |
+|                    |                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform-express` | [Express](https://expressjs.com/) is a well-known, minimalist web framework for Node.js. It is a battle-tested, production-ready library with extensive community resources. Nest uses the `@nestjs/platform-express` package by default, so no setup is required.                                                                                                                  |
+| `platform-fastify` | [Fastify](https://www.fastify.io/) is a high-performance, low-overhead framework focused on efficiency and speed. To learn how to use it, see [Fastify adapter](/http/performance#fastify-adapter).                                                                                                                                                                                 |
+| `platform-node`    | The `NodeAdapter` runs Nest directly on the `node:http` module of Node.js, and is the fastest of the three. Its request and response objects come with the Express-style helpers, so most Express middleware works with it. We recommend it starting with v12.3, and it will become the default in v13. To learn how to use it, see [Node adapter](/http/performance#node-adapter). |
 
-Whichever platform is used, it exposes its own application interface. These are seen respectively as `NestExpressApplication` and `NestFastifyApplication`.
+Each platform exposes its own application interface: `NestExpressApplication`, `NestFastifyApplication`, and `NestNodeApplication`, respectively.
 
-When you pass a type to the `NestFactory.create()` method, as in the example below, the `app` object will have methods available exclusively for that specific platform. Note, however, you don't **need** to specify a type **unless** you actually want to access the underlying platform API.
+When you pass a type to the `NestFactory.create()` method, as in the example below, the `app` object exposes methods that are available only on that platform. You don't **need** to specify a type **unless** you want to access the underlying platform API.
 
 ```typescript
 const app = await NestFactory.create<NestExpressApplication>(AppModule);
 ```
 
+##### Using the Node adapter
+
+Starting with v12.3, we recommend running new applications on the Node adapter. It is not the default yet, so install the package:
+
+```bash
+$ npm i --save @nestjs/platform-node
+```
+
+Then pass a `NodeAdapter` instance to `NestFactory.create()` in the `main.ts` file:
+
+```typescript
+@@filename(main)
+import { NestFactory } from '@nestjs/core';
+import { NestNodeApplication, NodeAdapter } from '@nestjs/platform-node';
+import { AppModule } from './app.module.js';
+
+async function bootstrap() {
+  const app = await NestFactory.create<NestNodeApplication>(
+    AppModule,
+    new NodeAdapter(),
+  );
+  await app.listen(process.env.PORT ?? 3000);
+}
+await bootstrap();
+@@switch
+import { NestFactory } from '@nestjs/core';
+import { NodeAdapter } from '@nestjs/platform-node';
+import { AppModule } from './app.module.js';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule, new NodeAdapter());
+  await app.listen(process.env.PORT ?? 3000);
+}
+await bootstrap();
+```
+
+Nothing else in the application changes: controllers, providers, and most Express middleware work as they are. See [Node adapter](/http/performance#node-adapter) for the few places where it differs from Express.
+
+The end-to-end test that the CLI generated (`test/app.e2e-spec.ts`) creates its own application, which runs on Express unless you pass an adapter. Pass `new NodeAdapter()` to its `createNestApplication()` call as well, so that the test runs on the same adapter as the application.
+
 #### Running the application
 
-Once the installation process is complete, you can run the following command at your OS command prompt to start the application listening for inbound HTTP requests:
+Once the installation is complete, run the following command to start the application and listen for inbound HTTP requests:
 
 ```bash
 $ npm run start
 ```
 
-> info **Hint** To speed up the development process (x20 times faster builds), you can use the [SWC builder](/recipes/swc) by passing the `-b swc` flag to the `start` script, as follows `npm run start -- -b swc`.
+> info **Hint** To speed up development builds, use the [SWC builder](/recipes/swc) by passing the `-b swc` flag to the `start` script: `npm run start -- -b swc`.
 
-This command starts the app with the HTTP server listening on the port defined in the `src/main.ts` file. Once the application is running, open your browser and navigate to `http://localhost:3000/`. You should see the `Hello World!` message.
+This command starts the HTTP server on the port defined in the `src/main.ts` file (`3000`, unless the `PORT` environment variable is set). Once the application is running, open your browser and navigate to `http://localhost:3000/`. You should see the `Hello World!` message.
 
-To watch for changes in your files, you can run the following command to start the application:
+To watch your files for changes, start the application with the following command instead:
 
 ```bash
 $ npm run start:dev
 ```
 
-This command will watch your files, automatically recompiling and reloading the server.
+This command watches your files and, whenever they change, recompiles and restarts the server.
 
 #### Linting and formatting
 
-[CLI](/cli/overview) provides best effort to scaffold a reliable development workflow at scale. Thus, a generated Nest project comes with both a code **linter** and **formatter** preinstalled (respectively [eslint](https://eslint.org/) and [prettier](https://prettier.io/)).
+The [Nest CLI](/cli/overview) aims to scaffold a reliable development workflow that scales. For a fast default workflow, generated TypeScript projects come with a code **linter** and a **formatter** preinstalled: [oxlint](https://oxc.rs/docs/guide/usage/linter.html) and [Prettier](https://prettier.io/), respectively.
 
-> info **Hint** Not sure about the role of formatters vs linters? Learn the difference [here](https://prettier.io/docs/en/comparison.html).
+> info **Hint** Not sure how formatters and linters differ? See Prettier's [comparison](https://prettier.io/docs/en/comparison.html).
 
-To ensure maximum stability and extensibility, we use the base [`eslint`](https://www.npmjs.com/package/eslint) and [`prettier`](https://www.npmjs.com/package/prettier) cli packages. This setup allows neat IDE integration with official extensions by design.
-
-For headless environments where an IDE is not relevant (Continuous Integration, Git hooks, etc.) a Nest project comes with ready-to-use `npm` scripts.
+For headless environments where an IDE is not involved (continuous integration, Git hooks, etc.), the project includes ready-to-use `npm` scripts that run [`oxlint`](https://www.npmjs.com/package/oxlint) and [`prettier`](https://www.npmjs.com/package/prettier):
 
 ```bash
-# Lint and autofix with eslint
+# Lint with oxlint
 $ npm run lint
 
 # Format with prettier
 $ npm run format
+```
+
+#### Coding agents
+
+Projects generated by `nest new` are set up for coding agents such as Codex, Cursor and Claude Code. They include an `AGENTS.md` file, which tells agents about the project and points them to this documentation, and the official [NestJS agent skills](https://github.com/nestjs/agent-skills). These [Agent Skills](https://agentskills.io) cover starting a project, adding features, authentication and authorization, data, testing and production, with the current APIs and the mistakes that still pass tests. An agent loads a skill on its own when the task matches it. Agents can also read this documentation as markdown: [llms.txt](https://docs.nestjs.com/llms.txt) indexes every chapter.
+
+By default, `nest new` adds the skills to `.agents/skills` and `.claude/skills`, for Codex, Cursor and Claude Code. To choose the agents, pass `--skills` (for example, `--skills cursor` or `--skills claude,agents`), or pass `--skip-skills` to leave the skills out. See [the `new` command's options](/cli/usages#nest-new).
+
+When an agent runs `nest new`, nobody answers the prompts, so the project gets the defaults: [NestJS Observe](/observability/overview) is set up but not linked, and sends nothing until it is. The CLI's output and the generated `AGENTS.md` ask the agent to tell you to run `npx @nestjs/observe link`, which links the project once you approve a code in the browser. Pass `--no-observe` to leave Observe out.
+
+To add the skills to an existing project, or to update them to the latest version, run:
+
+```bash
+$ npx @nestjs/skills@latest add
+```
+
+This copies the skills into `.agents/skills`, which Codex and Cursor read. Pass `--agent claude` to copy them into `.claude/skills` for Claude Code, `--agent all` for both, or `--global` to install them for every project on your machine. In Claude Code, the skills are also available as a plugin:
+
+```bash
+$ claude plugin marketplace add nestjs/agent-skills
+$ claude plugin install nestjs@nestjs
 ```

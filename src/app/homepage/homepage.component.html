@@ -1,4 +1,10 @@
-<app-header (toggle)="toggleSidebar()" [isSidebarOpened]="isSidebarOpened">
+<a class="skip-link" href="#content" (click)="skipToContent($event)"
+  >Skip to content</a
+>
+<p class="visually-hidden" role="status" aria-live="polite">
+  {{ routeAnnouncement }}
+</p>
+<app-header (sidebarToggle)="toggleSidebar()" [isSidebarOpened]="isSidebarOpened">
   <div class="logo-wrapper">
     <a
       href="https://docs.nestjs.com/"
@@ -9,11 +15,19 @@
   </div>
 </app-header>
 <div class="container-fluid">
-  <app-menu [class.opened]="isSidebarOpened" class="app-menu"></app-menu>
+  <app-menu
+    [class.opened]="isSidebarOpened"
+    [class.prerendered]="!isBrowser"
+    class="app-menu"
+  ></app-menu>
   <div class="container" [class.wide]="!isSidebarOpened">
     <div class="page-wrapper">
       <app-toc [contentReference]="contentRef"></app-toc>
-      <router-outlet (activate)="onRouteActivate($event)"></router-outlet>
+      <main id="content" tabindex="-1" #mainContent>
+        <app-copy-markdown></app-copy-markdown>
+        <router-outlet (activate)="onRouteActivate($event)"></router-outlet>
+        <app-page-nav></app-page-nav>
+      </main>
     </div>
     <div class="sponsors-wrapper">
       <div class="sponsors-container">
