@@ -279,6 +279,45 @@ GraphQLModule.forRoot<ApolloDriverConfig>({
 });
 ```
 
+To configure the underlying WebSocket server yourself (e.g., to enable `perMessageDeflate`, limit `maxPayload`, or add a `verifyClient` check), create a [`ws`](https://github.com/websockets/ws) `WebSocketServer` and pass it as `server`:
+
+```typescript
+import { WebSocketServer } from 'ws';
+
+GraphQLModule.forRoot<ApolloDriverConfig>({
+  driver: ApolloDriver,
+  subscriptions: {
+    'graphql-ws': {
+      server: new WebSocketServer({
+        noServer: true,
+        path: '/subscriptions',
+        maxPayload: 1024 * 1024,
+      }),
+    },
+  },
+});
+```
+
+- The server must be created with `noServer: true`: Nest routes the HTTP upgrade requests to it, and throws otherwise.
+- If the server has a `path`, it takes precedence over `graphql-ws.path` and the GraphQL endpoint path.
+- The server is handed over to `graphql-ws`, which replaces its `handleProtocols` option and, when the application shuts down, closes it and removes all of its listeners.
+- Use a separate server for each `GraphQLModule`; one instance can't be shared between modules.
+
+When another `upgrade` listener shares the HTTP server (for example, a gateway using the [`WsAdapter`](/websockets/adapter#ws-library)), Nest leaves upgrade requests for other paths to it, and closes the connection if no listener has answered the handshake within a second. If another listener answers late, for example after authenticating the request, raise the delay with `unclaimedUpgradeTimeout` (in milliseconds), or set it to `0` to leave such connections to the other listeners:
+
+```typescript
+GraphQLModule.forRoot<ApolloDriverConfig>({
+  driver: ApolloDriver,
+  subscriptions: {
+    'graphql-ws': {
+      unclaimedUpgradeTimeout: 5000,
+    },
+  },
+});
+```
+
+> info **Hint** Only the `ws` implementation is supported. The Fastify and uWebSockets adapters of `graphql-ws` can't be plugged in this way.
+
 #### Authentication over WebSockets
 
 To check whether the user is authenticated, use the `onConnect` callback function, which you can specify in the `subscriptions` options.

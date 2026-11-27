@@ -69,7 +69,7 @@ This method returns a 200 status code along with the associated response, which 
 
 > warning **Warning** Nest detects when a handler uses either `@Res()` or `@Next()`, which indicates that you have chosen the library-specific option. If both approaches are used at the same time, the standard approach is **automatically disabled** for that route and no longer works as expected. To combine them (for example, to inject the response object only to set cookies or headers while leaving the rest to the framework), set the `passthrough` option to `true` in the `@Res({{ '{' }} passthrough: true {{ '}' }})` decorator.
 
-<app-banner-devtools></app-banner-devtools>
+<app-banner-observe></app-banner-observe>
 
 #### Request object
 
@@ -412,7 +412,7 @@ export class AdminController {
 }
 ```
 
-> warning **Warning** Since **Fastify** does not support nested routers, use the default Express adapter if you rely on sub-domain routing.
+> warning **Warning** Since **Fastify** does not support nested routers, use the default Express adapter or the Node adapter if you rely on sub-domain routing.
 
 Like a route `path`, the `host` option can use tokens to capture the dynamic value at that position in the host name, as the host parameter token in the `@Controller()` decorator below shows. You can access host parameters declared this way with the `@HostParam()` decorator, added to the method signature.
 
@@ -546,7 +546,7 @@ If your application needs to handle more complex query parameters, such as neste
 ?item[]=1&item[]=2
 ```
 
-configure your HTTP adapter (Express or Fastify) to use an appropriate query parser. In Express, use the `extended` parser, which supports rich query objects:
+configure your HTTP adapter (Express, Fastify, or Node) to use an appropriate query parser. In Express, use the `extended` parser, which supports rich query objects:
 
 ```typescript
 @@filename(main)
@@ -557,20 +557,43 @@ const app = await NestFactory.create(AppModule);
 app.set('query parser', 'extended');
 ```
 
-In Fastify, use the `querystringParser` option:
+In Fastify, use the `querystringParser` router option:
 
 ```typescript
 @@filename(main)
 const app = await NestFactory.create<NestFastifyApplication>(
   AppModule,
   new FastifyAdapter({
-    querystringParser: (str) => qs.parse(str),
+    routerOptions: {
+      querystringParser: (str) => qs.parse(str),
+    },
   }),
 );
 @@switch
 const app = await NestFactory.create(
   AppModule,
   new FastifyAdapter({
+    routerOptions: {
+      querystringParser: (str) => qs.parse(str),
+    },
+  }),
+);
+```
+
+The Node adapter takes the `querystringParser` option directly:
+
+```typescript
+@@filename(main)
+const app = await NestFactory.create<NestNodeApplication>(
+  AppModule,
+  new NodeAdapter({
+    querystringParser: (str) => qs.parse(str),
+  }),
+);
+@@switch
+const app = await NestFactory.create(
+  AppModule,
+  new NodeAdapter({
     querystringParser: (str) => qs.parse(str),
   }),
 );

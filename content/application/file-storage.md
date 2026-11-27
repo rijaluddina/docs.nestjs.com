@@ -1,5 +1,9 @@
 ### File storage
 
+`@nestjs/storage` keeps files on named disks (a local folder, S3 or an S3-compatible store such as R2) behind one API, with public and signed URLs.
+
+> info **Hint** For a complete upload service built on this package, follow [Build a file upload service in Node.js](/tutorials/file-uploads).
+
 An online store for cat food and supplies keeps three kinds of files. Product photos are uploaded by staff and shown to everyone. Invoices are PDF files that only the customer who paid should be able to download. And the warehouse team photographs products with the store's mobile app, which uploads large photos that shouldn't have to pass through the order API.
 
 In development, all of this should work from a folder on the laptop. In production, the files go to S3 or Cloudflare R2, because the API runs on several instances and none of them has a disk that lasts. The code that stores and serves files should be the same in both.
@@ -174,7 +178,7 @@ export class PhotosController {
 
 By the time the handler runs, the photo is stored. `uploadToDisk()` has done three things on the way:
 
-- **It checked what the file is, not what the client says it is.** A browser sends the type it guesses from the file name, and a script can send anything, so a file declared `image/png` may well be an HTML page or an SVG with a script in it. The engine reads the first bytes of the stream, detects the type from them, and refuses anything not in `contentTypes` with a `415` before a byte is written. The stored content type is the detected one, never the client's.
+- **It checked what the file is, not what the client says it is.** A browser sends the type it guesses from the file name, and a script can send anything, so a file declared `image/png` may well be an HTML page or an SVG with a script in it. The engine reads the first bytes of the stream, detects the type from their signature (JPEG, PNG, GIF, WebP, AVIF, HEIC and PDF are built in; [other formats](/application/file-storage#accept-csv-and-other-text-formats) take a detector of your own), and refuses anything not in `contentTypes` with a `415` before a byte is written. The stored content type is the detected one, never the client's.
 - **It enforced the size limit without leaving a partial file.** multer stops reading at `limits.fileSize`. The engine then refuses to commit what it received: the request fails with `413 File too large`, nothing is stored, and no file is replaced.
 - **It picked the key.** By default, a random UUID and the extension of the detected type, such as `2f1c0d6e-….png`. Unique keys matter: an upload never overwrites another, and a cached photo never goes stale.
 
@@ -211,7 +215,7 @@ export class PhotosService {
     @InjectDisk('photos') private readonly photos: StorageDisk,
   ) {}
 
-  async replace(productId: string, key: string) {
+  async replace(productId: string, key: string): Promise<{ id: string; photoUrl: string }> {
     let previous: string | undefined;
     try {
       previous = this.productsService.findOne(productId).photoKey;
@@ -248,6 +252,58 @@ import { ProductsService } from './products.service.js';
 })
 export class ProductsModule {}
 ```
+
+##### Accept CSV and other text formats
+
+Built-in detection recognizes formats by the fixed bytes they start with. A CSV file has no such signature, so `contentTypes: ['text/csv']` on its own refuses every CSV with a `415`. For a format like that, pass `detectContentType`: a function that receives the start of the file and returns its type, or `undefined` when it doesn't recognize it.
+
+Staff update prices by uploading a spreadsheet export. The app recognizes one by its header row:
+
+```typescript
+@@filename(products/price-list)
+/** The header row of a price list exported from the spreadsheet */
+const PRICE_LIST_HEADER = 'sku,price';
+
+/** Recognizes a price list by its first line. It doesn't check the rows. */
+export function detectPriceList(bytes: Buffer): string | undefined {
+  // Spreadsheet apps often start a UTF-8 export with a byte order mark: TextDecoder drops it
+  const text = new TextDecoder().decode(bytes);
+  const header = text.split(/\r?\n/, 1)[0];
+  return header === PRICE_LIST_HEADER ? 'text/csv; charset=utf-8' : undefined;
+}
+```
+
+The upload endpoint allows `text/csv` and passes the function to `uploadToDisk()`. Price lists go to the private disk, because nobody has checked their rows yet:
+
+```typescript
+@@filename(products/price-lists.controller)
+@Post('products/price-lists')
+@UseInterceptors(
+  FileInterceptor('prices', {
+    storage: uploadToDisk({
+      disk: 'private',
+      key: (file) => `price-lists/${randomUUID()}${file.extension}`,
+      contentTypes: ['text/csv'],
+      detectContentType: detectPriceList,
+    }),
+    limits: { fileSize: 1024 * 1024, files: 1 },
+  }),
+)
+importPrices(@UploadedFile() file: StoredUpload | undefined) {
+  if (!file) {
+    throw new BadRequestException('Attach the price list as the "prices" field');
+  }
+  return this.priceListsService.import(file.key);
+}
+```
+
+- **Built-in detection comes first.** The function only runs when the file isn't one of the built-in formats. A PNG renamed to `prices.csv` is still detected as a PNG, and refused. Passing the exported `detectContentType()` helper as the option does nothing, because that's the check that already ran.
+- **It sees the start of the file.** `bytes` holds the first 4 KiB, or the whole file when it's smaller. To change that, set `contentTypeSampleBytes` to a whole number from 1 byte to 64 KiB (it requires `detectContentType`). The second argument has `originalname` and `mimetype`, but they're the client's claims, so decide from the bytes.
+- **What it returns is checked against `contentTypes`.** Types are compared without their parameters: `text/csv` in the list allows `text/csv; charset=utf-8`. When the function returns `undefined`, or a type that isn't in the list, the upload is refused with a `415` before a byte is written. Without `contentTypes`, any returned type is accepted, and an unrecognized file is stored as `application/octet-stream`.
+- **The returned type is the one the file is stored and served with.** Include the charset for text formats. It also sets the extension: `file.extension` is `.csv` in `key()` above, and the default key ends with it too.
+- **It may be async.** The engine waits for the promise while it holds the request, so it must settle quickly. Return `undefined` for a file you don't recognize rather than throwing: an error fails the upload as it would anywhere else in the request, so anything but an `HttpException` becomes a `500` instead of a `415`. So does returning anything but a string or `undefined`.
+
+> warning **Warning** The function classifies the start of the file. It doesn't validate the file: a price list with the right header can hold anything after it. `PriceListsService.import()` must read the whole file, check every row, and delete `file.key` when it rejects the list, as with any check that runs after the interceptor.
 
 #### Keep invoices private
 
@@ -307,6 +363,8 @@ export class InvoicesService {
 ```
 
 `put()` takes a `Buffer`, a string, a `Uint8Array`, a Node stream, a web `ReadableStream`, or any async iterable of bytes. On every disk, a write is atomic: a reader sees the old file or the new one, never half of one, and a write that fails leaves nothing behind. `metadata` stores your own string values with the file; `stat()` and `get()` return them.
+
+For `LocalDisk`, a failed filesystem write removes the temporary file and preserves any existing file. If writing makes no progress, or the persisted size differs from the bytes written, `put()` rejects with `StorageError`.
 
 `signedUrl()` returns a link that works without any other credentials until it expires. `expiresIn` is a duration: `'5m'`, `'1h'`, or milliseconds, 15 minutes by default and at most 7 days, S3's limit. `filename` sets the name the browser saves the file under.
 
@@ -567,7 +625,7 @@ export function createStorageOptions(config: ConfigService): StorageModuleOption
 
 With S3, `signedUrl()` and `signedUpload()` return presigned URLs, signed with the credentials, which the bucket verifies itself: the app's `/files` route isn't involved. `url()` returns URLs under `publicUrl`, typically a CDN or R2's public bucket domain in front of the photos bucket.
 
-Uploads stream to S3 too. A file up to 8 MiB goes up in one request; a longer one, or a stream whose length isn't known, goes up as a multipart upload, four 8 MiB parts at a time, and is aborted if anything fails, so a failed upload never becomes a file. Requests that fail with a network error, a timeout, throttling (`429`, `SlowDown`) or a `5xx` are retried with backoff, up to 3 attempts in all. `multipart`, `retry` and `timeout` tune this per disk.
+Uploads stream to S3 too. A file up to 8 MiB goes up in one request; a longer one, or a stream whose length isn't known, goes up as a multipart upload, four 8 MiB parts at a time, and is aborted if anything fails, so a failed upload never becomes a file. Requests that fail with a network error, a timeout, throttling (`429`, `SlowDown`) or a `5xx` are retried with backoff, up to 3 attempts in all. `multipart`, `retry` and `timeout` tune this per disk. `retry` is a number of attempts, `false` for a single one, or an object: `attempts`, `backoff` (`delay`, `factor`, `maxDelay` and `jitter`, or a function of the attempt and the error that returns the wait) and `retryIf(error, attempt)`, which returns `false` to stop retrying.
 
 > info **Hint** Every S3 request is signed with Signature Version 4, implemented on `node:crypto`. It is checked against the AWS Signature Version 4 test suite and the examples in the Amazon S3 API reference, so there is no AWS SDK to install.
 
@@ -642,7 +700,7 @@ The files are in `storage/photos` and `storage/private`, as plain files: `storag
 
 #### Testing
 
-`InMemoryDisk` keeps files in memory and behaves like the other disks: the same key rules, ranges, listings, metadata and signed URLs. In an end-to-end test, replace the disks by overriding `STORAGE_MODULE_OPTIONS`, the options the factory would have returned:
+`InMemoryDisk` keeps files in memory and behaves like the other disks: the same key rules, ranges, listings, metadata and signed URLs. Like S3, it can hold both `a` and `a/b`, which a local disk refuses with `StorageKeyConflictError`. In an end-to-end test, replace the disks by overriding `STORAGE_MODULE_OPTIONS`, the options the factory would have returned:
 
 ```typescript
 @@filename(test/photos.e2e-spec)
@@ -726,17 +784,17 @@ To test what reaches a real file system, use a `LocalDisk` on a temporary direct
 
 ##### Disk methods
 
-Every disk has the same methods, key rules and errors. A key is a relative, `/`-separated path of at most 1024 UTF-8 bytes, without empty, `.` or `..` segments, backslashes or control characters.
+Every disk has the same methods, key rules and errors. Every method that does I/O takes an optional `signal`, an `AbortSignal`: the call rejects with its reason, and `S3Disk` stops retrying. Aborting after `get()` has resolved ends the `body` stream with the reason. A key is a relative, `/`-separated path of at most 1024 UTF-8 bytes, without empty, `.` or `..` segments, backslashes or control characters.
 
 | Method | Description |
 | --- | --- |
 | `put(key, body, options)` | Writes a file atomically. Options: `contentType` (inferred from the extension by default), `cacheControl`, `contentDisposition`, `metadata` (string values, 2 KB in total), `contentLength`, `signal`. Resolves to `key`, `size`, `contentType` and `etag`. |
-| `get(key, options)` | The file's metadata and its `body` as a Node stream. `range` takes `start` and an inclusive `end`, or `suffix`. |
-| `getBuffer(key)`, `getText(key)` | The whole file. |
-| `stat(key)`, `exists(key)` | The metadata without the body, or whether the file exists. |
-| `delete(keys)` | One key or an array. Missing keys are ignored. |
-| `list(options)`, `listAll(options)` | A page of `key`, `size`, `lastModified` and `etag` in UTF-8 byte order, with a `cursor`. Options: `prefix`, `cursor`, `limit` (up to 1000, the default). `listAll()` iterates every page. |
-| `copy(from, to)`, `move(from, to)` | Within the disk, metadata included. |
+| `get(key, options)` | The file's metadata and its `body` as a Node stream. `range` takes `start` and an inclusive `end`, or `suffix`. Also `signal`. |
+| `getBuffer(key, options)`, `getText(key, options)` | The whole file. Option: `signal`. |
+| `stat(key, options)`, `exists(key, options)` | The metadata without the body, or whether the file exists. Option: `signal`. |
+| `delete(keys, options)` | One key or an array. Missing keys are ignored. Option: `signal`; an abort stops between keys and keeps what was already deleted. |
+| `list(options)`, `listAll(options)` | A page of `key`, `size`, `lastModified` and `etag` in UTF-8 byte order, with a `cursor`. Options: `prefix`, `cursor`, `limit` (up to 1000, the default), `signal`. `listAll()` iterates every page. |
+| `copy(from, to, options)`, `move(from, to, options)` | Within the disk, metadata included. Option: `signal`; an abort stops only before anything changes. |
 | `url(key)` | The public URL under `publicUrl`. Throws without one. |
 | `signedUrl(key, options)` | A download link. Options: `expiresIn` (default 15 minutes, at most 7 days), `filename`, `disposition`. See [Keep invoices private](/application/file-storage#keep-invoices-private). |
 | `signedUpload(key, options)` | `url`, `method` (`PUT`), `headers` and `expiresAt` for a direct upload. Options: `contentType` (required), `contentLength`, `expiresIn`. See [Upload straight to storage from the mobile app](/application/file-storage#upload-straight-to-storage-from-the-mobile-app). |
@@ -749,17 +807,17 @@ Every disk has the same methods, key rules and errors. A key is a relative, `/`-
 | `S3Disk` | `bucket` (required), `region`, `endpoint`, `forcePathStyle`, `credentials`, `prefix`, `serverSideEncryption`, `kmsKeyId`, `multipart`, `retry`, `timeout`, `batchDelete`, `fetch`, `publicUrl`. See [Use S3 or R2 in production](/application/file-storage#use-s3-or-r2-in-production). |
 | `InMemoryDisk` | `publicUrl`, `signedUrls`. For tests, with `keys()` and `clear()`. See [Testing](/application/file-storage#testing). |
 
-`signedUrls` takes `baseUrl`, the route that serves the URLs, and `keys`, signing keys of at least 32 characters. The first key signs, and all of them verify. `S3Disk` defaults: `region` from `AWS_REGION`, then `AWS_DEFAULT_REGION`, then `us-east-1`; credentials from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; `multipart` with a `partSize` of 8 MiB and a `concurrency` of 4; `retry: 3`, with backoff from 100 ms doubling to 20 seconds; no `timeout`; `batchDelete: true`.
+`signedUrls` takes `baseUrl`, the route that serves the URLs, and `keys`, signing keys of at least 32 characters. The first key signs, and all of them verify. `S3Disk` defaults: `region` from `AWS_REGION`, then `AWS_DEFAULT_REGION`, then `us-east-1`; credentials from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; `multipart` with a `partSize` of 8 MiB and a `concurrency` of 4; `retry: 3`, with backoff from 100 ms doubling to 20 seconds, with full jitter; no `timeout`; `batchDelete: true`.
 
 ##### HTTP helpers
 
 | Helper | Options | Description |
 | --- | --- | --- |
-| `uploadToDisk(options)` | `disk` (a name or an instance, default the default disk), `contentTypes`, `cacheControl`, `key`, `metadata` | A storage engine for `FileInterceptor()`. `key` and `metadata` are functions of the file and the request. See [Upload product photos](/application/file-storage#upload-product-photos). |
+| `uploadToDisk(options)` | `disk` (a name or an instance, default the default disk), `contentTypes`, `detectContentType`, `contentTypeSampleBytes` (default 4 KiB, from 1 byte to 64 KiB, requires `detectContentType`), `cacheControl`, `key`, `metadata` | A storage engine for `FileInterceptor()`. `key` and `metadata` are functions of the file and the request. `detectContentType(bytes, file)` returns the type of a file the built-in detection doesn't recognize, or `undefined`, and may return a promise. See [Upload product photos](/application/file-storage#upload-product-photos) and [Accept CSV and other text formats](/application/file-storage#accept-csv-and-other-text-formats). |
 | `serveFile(disk, key, options)` | `res` (required), `req`, `disposition` (default `attachment`), `filename`, `cacheControl` | Streams a file as the response, with `Range` and `If-None-Match` support when given `req`. |
 | `serveSignedUrl(disk, options)` | `req`, `res`, `cacheControl` | Verifies and serves an app-served signed download URL. See [Serve signed URLs in development](/application/file-storage#serve-signed-urls-in-development). |
 | `receiveSignedUpload(disk, options)` | `req`, `res`, `maxSize` | Verifies an app-served signed upload URL and streams the `PUT` body onto the disk. `maxSize` limits uploads signed without a `contentLength`. |
-| `detectContentType(bytes)` | none | The type of a file from its first bytes: JPEG, PNG, GIF, WebP, AVIF, HEIC or PDF. |
+| `detectContentType(bytes)` | none | The type of a file from its first 16 bytes: JPEG, PNG, GIF, WebP, AVIF, HEIC or PDF, else `undefined`. It's the built-in detection `uploadToDisk()` runs, and knows nothing of the `detectContentType` option. |
 
 ##### Errors
 

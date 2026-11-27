@@ -1,6 +1,6 @@
 ### Exception filters
 
-Nest comes with a built-in **exceptions layer** that processes all unhandled exceptions across an application. When your application code does not handle an exception, this layer catches it and automatically sends an appropriate, user-friendly response.
+Nest comes with a built-in **exceptions layer** that processes all unhandled exceptions raised while an incoming request or message is being handled. When your application code does not handle an exception, this layer catches it and automatically sends an appropriate, user-friendly response.
 
 <figure>
   <img class="illustrative-image" src="/assets/Filter_1.png" />
@@ -15,7 +15,7 @@ Out of the box, this is done by a built-in **global exception filter**, which ha
 }
 ```
 
-> info **Hint** The global exception filter partially supports the `http-errors` library. A thrown error that carries `statusCode` and `message` properties in the shape that library produces is sent back with those values, instead of the default `InternalServerErrorException` response for unrecognized exceptions.
+> info **Hint** The global exception filter partially supports the `http-errors` library. A thrown error that carries `statusCode` and `message` properties in the shape that library produces is sent back with those values, instead of the default `InternalServerErrorException` response for unrecognized exceptions. Starting with NestJS v12.2, if the error's `expose` property is `false`, the response carries the standard reason phrase for its status code (for example, `Bad Gateway`) instead of the error's message. `http-errors` sets `expose` to `false` for status codes of 500 and above, so pass `expose: true` to `createError()` when the message of a 5xx error is meant for the client.
 
 #### Throwing standard exceptions
 
@@ -53,6 +53,8 @@ By default, the JSON response body contains two properties:
 - `message`: a short description of the HTTP error based on the `status`
 
 To override only the message portion of the JSON response body, supply a string in the `response` argument. To override the entire JSON response body, pass an object in the `response` argument. Nest serializes the object and returns it as the JSON response body.
+
+> info **Hint** An `Error` instance passed as the `response` argument is not serialized into the response body. Nest sends the default `{{ '{' }} statusCode, message {{ '}' }}` body for the status instead, so the properties of the error are not exposed to the client. To keep the original error for logging, pass it as the `cause` instead.
 
 The second constructor argument, `status`, should be a valid HTTP status code. Best practice is to use the `HttpStatus` enum imported from `@nestjs/common`.
 
@@ -197,8 +199,9 @@ The response then carries the code alongside the usual fields:
 ```json
 {
   "message": "Password is too weak",
-  "errorCode": "WEAK_PASSWORD",
-  "statusCode": 400
+  "error": "Bad Request",
+  "statusCode": 400,
+  "errorCode": "WEAK_PASSWORD"
 }
 ```
 
@@ -223,7 +226,7 @@ Let's create an exception filter that catches exceptions that are instances of t
 ```typescript
 @@filename(http-exception.filter)
 import { ExceptionFilter, Catch, ArgumentsHost, HttpException } from '@nestjs/common';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 
 @Catch(HttpException)
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -372,6 +375,8 @@ You can register as many filters as needed with this technique by adding each on
 #### Catch everything
 
 To catch **every** unhandled exception, regardless of its type, leave the `@Catch()` decorator's parameter list empty, i.e., `@Catch()`.
+
+> warning **Warning** "Every unhandled exception" here means every exception that propagates out of the handler chain of a request: middleware, guards, interceptors, pipes, and the route handler itself. The exceptions layer wraps that invocation, so it only sees errors that travel back through it. A catch-all filter is **not** a replacement for `process.on('uncaughtException')` and `process.on('unhandledRejection')`. An error thrown from a `setTimeout` callback, from a listener of an event emitted outside the handler, or from a promise that is never awaited leaves the request that started it, so no filter is invoked. Those errors still crash or destabilize the process and must be handled at the process level, as described in the [Node.js documentation](https://nodejs.org/api/process.html#event-uncaughtexception).
 
 The example below is platform-agnostic: it delivers the response through the [HTTP adapter](./faq/http-adapter) rather than using the platform-specific `Request` and `Response` objects directly, so the same filter works with both Express and Fastify.
 

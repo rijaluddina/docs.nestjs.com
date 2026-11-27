@@ -12,6 +12,8 @@ Nest provides two built-in interceptors that apply these rules declaratively:
 
 > info **Hint** Neither interceptor serializes [StreamableFile](/http/file-upload#streaming-files) responses.
 
+A [streamed response](/http/streaming-responses#interceptors) is serialized one object at a time on HTTP routes: each object that an async generator, an object-mode `Readable`, or a `ReadableStream` yields goes through the interceptor before it is sent as a line of JSON. Strings and binary chunks are sent unchanged.
+
 #### Exclude properties
 
 Suppose you want to exclude the `password` property of a user entity from every response. Annotate the entity as follows:
@@ -112,7 +114,7 @@ In the example below, both conditional branches return plain JavaScript objects,
 @UseInterceptors(ClassSerializerInterceptor)
 @SerializeOptions({ type: UserEntity })
 @Get()
-findOne(@Query() { id }: { id: number }): UserEntity {
+findOne(@Query('id', ParseIntPipe) id: number): UserEntity {
   if (id === 1) {
     return {
       id: 1,
@@ -132,6 +134,8 @@ findOne(@Query() { id }: { id: number }): UserEntity {
 ```
 
 > info **Hint** Declaring the handler's return type lets TypeScript check that the returned plain object matches the shape of the DTO or entity. The `plainToInstance()` function doesn't provide this type checking, so a mismatched object can go unnoticed.
+
+> warning **Warning** The response is shaped by the `type` class, not by the class of the returned value. A value that isn't an instance of the `type` class, such as an instance of another entity, is converted like a plain object: the decorators of its own class, such as `@Exclude()`, are ignored, and properties that the `type` class doesn't declare are copied unchanged. To send only the properties of the `type` class, decorate each of them with `@Expose()` and add `excludeExtraneousValues: true` to the options of the same `@SerializeOptions()` decorator.
 
 
 #### Schema-based serialization
@@ -198,7 +202,7 @@ The service returns user records that include a `password` property, but the cli
 }
 ```
 
-When a handler returns an array, as `findAll()` does, the interceptor applies the schema to **each element**. Pass the schema of a single item, not an array schema.
+When a handler returns an array, as `findAll()` does, the interceptor applies the schema to **each element**, as it does to each object of a [streamed response](/http/streaming-responses#interceptors) on an HTTP route. Pass the schema of a single item, not an array schema.
 
 `null`, `undefined`, primitive values, and `StreamableFile` responses are sent unchanged, as are responses of handlers without a schema.
 
@@ -302,7 +306,7 @@ A working example of the `ClassSerializerInterceptor` is available [here](https:
 
 #### WebSockets and Microservices
 
-While this chapter shows examples using HTTP applications (e.g., Express or Fastify), both `ClassSerializerInterceptor` and `StandardSchemaSerializerInterceptor` work the same for WebSockets and microservices, regardless of the transport.
+While this chapter shows examples using HTTP applications (e.g., Express or Fastify), both `ClassSerializerInterceptor` and `StandardSchemaSerializerInterceptor` work the same for WebSockets and microservices, regardless of the transport. The exception is a stream: only on HTTP routes is each object it yields serialized, and other transports, such as WebSockets, microservices, and GraphQL subscriptions, receive the stream as the handler returned it.
 
 #### Learn more
 

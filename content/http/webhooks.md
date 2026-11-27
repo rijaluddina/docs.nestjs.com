@@ -1,5 +1,9 @@
 ### Webhooks
 
+`@nestjs/webhooks` sends signed, retried webhooks to your partners after the transaction commits, and verifies the webhooks you receive on their raw body.
+
+> info **Hint** For a payment provider's webhooks in a complete shop, follow [Accept payments with webhooks in Node.js](/tutorials/payments-webhooks).
+
 An online store for cat food and supplies sells to cat shelters and resellers that buy in bulk, through its API. Northside Pet Supplies, a reseller, places an order and wants to know when it ships and when it's cancelled, without polling: a webhook to its warehouse system. The store receives webhooks too: the payment provider reports payments, and the carrier reports shipments. Both directions look simple, and both go wrong in the same ways:
 
 - **Sending.** A `fetch()` after the order commits is lost when the process dies in between, and sent for a transaction that then rolls back. A retry sends the same event twice without telling the partner so. Every partner writes its own verifier for a homemade signature. A partner that is down for an hour is hammered, a dead endpoint is never turned off, and nobody can answer "did you send it?". And the URL the partner typed is a server-side request forgery waiting to happen: `https://169.254.169.254/` answers with the cloud credentials.
@@ -68,7 +72,7 @@ The catalog has two products, `salmon-kibble-2kg` at 2499 cents and `clumping-li
 
 #### Keep webhooks in your database
 
-There's nothing to create for webhooks, or for the outbox they travel through: no tables, entities or Prisma models. Register their two stores, and each creates its own schema, `nest_webhooks` and `nest_outbox`, and migrates it: at startup in development and in tests, and in production with `npx nest-webhooks migrate` and `npx nest-outbox migrate`, or with their `migrationSql()` in your own migrations.
+There's nothing to create for webhooks, or for the outbox they travel through: no tables, entities or Prisma models. Register their two stores, and each creates its own schema, `nest_webhooks` and `nest_outbox`, and migrates it: at startup in development and in tests, and in production with `npx @nestjs/webhooks migrate` and `npx @nestjs/outbox migrate`, or with their `migrationSql()` in your own migrations.
 
 The package keeps the endpoints, with their secrets, the messages it dispatched, their deliveries and the log of every attempt in a **store**, which it reads through two contracts, `WebhookEndpointStore` and `WebhookDeliveryStore`. Until you register one, the module keeps them in memory: fine for a first run, but a restart loses every pending delivery, and two instances don't share them.
 
@@ -119,15 +123,15 @@ The outbox's store keeps its messages, dead letters and inbox in `nest_outbox` (
 In production, apply the migrations before the new version of your application starts, as you apply your own, so that no instance changes a schema while it boots: in the middle of a rolling deploy, that would lock busy tables, and a least-privilege database user can't do it anyway. The packages' command lines do it from your deploy step, next to `npx drizzle-kit migrate`. They read the database from `DATABASE_URL`, or from `--url`, and need `pg` installed:
 
 ```bash
-$ npx nest-webhooks status
+$ npx @nestjs/webhooks status
 Schema "nest_webhooks" is at version 0; this version of @nestjs/webhooks needs version 1.
-$ npx nest-webhooks migrate
+$ npx @nestjs/webhooks migrate
 Migrated schema "nest_webhooks" to version 1 (applied 1).
-$ npx nest-outbox migrate
+$ npx @nestjs/outbox migrate
 Migrated schema "nest_outbox" to version 1 (applied 1).
 ```
 
-`status` exits with 1 while the schema is behind, which makes it a check for CI. To apply the migrations with your own migration tool instead, take their SQL from `npx nest-webhooks sql` and `npx nest-outbox sql`, or from `PostgresWebhookStore.migrationSql()` and `PostgresOutboxStore.migrationSql()` in code: the statements of every migration, with the bookkeeping that records the version. Run each in one transaction, as TypeORM's and Drizzle's migrators do. With TypeORM, that's a migration of your own, next to the ones it generates for your entities:
+`status` exits with 1 while the schema is behind, which makes it a check for CI. To apply the migrations with your own migration tool instead, take their SQL from `npx @nestjs/webhooks sql` and `npx @nestjs/outbox sql`, or from `PostgresWebhookStore.migrationSql()` and `PostgresOutboxStore.migrationSql()` in code: the statements of every migration, with the bookkeeping that records the version. Run each in one transaction, as TypeORM's and Drizzle's migrators do. With TypeORM, that's a migration of your own, next to the ones it generates for your entities:
 
 ```typescript
 @@filename(typeorm/migrations/1790801311590-WebhookStores)
@@ -147,13 +151,13 @@ export class WebhookStores1790801311590 implements MigrationInterface {
 }
 ```
 
-With drizzle-kit, create a custom migration per store, and fill each with its SQL, a `--> statement-breakpoint` line between the statements: Drizzle's migrator then runs them one at a time, which PGlite requires. In code, `migrationSql()` with `statementBreakpoints: true` returns the same.
+With drizzle-kit, create a custom migration per store, and fill the file each creates with its SQL, a `--> statement-breakpoint` line between the statements: Drizzle's migrator then runs them one at a time, which PGlite requires. In code, `migrationSql()` with `statementBreakpoints: true` returns the same.
 
 ```bash
 $ npx drizzle-kit generate --custom --name=outbox
-$ npx nest-outbox sql --statement-breakpoints > drizzle/0002_outbox.sql
+$ npx @nestjs/outbox sql --statement-breakpoints > drizzle/20261103120000_outbox/migration.sql
 $ npx drizzle-kit generate --custom --name=webhooks
-$ npx nest-webhooks sql --statement-breakpoints > drizzle/0003_webhooks.sql
+$ npx @nestjs/webhooks sql --statement-breakpoints > drizzle/20261103120100_webhooks/migration.sql
 ```
 
 On MySQL, the stores' `migrationStatements()` return the statements one per string, and a TypeORM migration runs them one per call:
@@ -1017,7 +1021,7 @@ import { PaymentProviderWebhooksController } from './payment-provider-webhooks.c
 export class ProviderWebhooksModule {}
 ```
 
-What the decorator checks, in order: the three `webhook-` headers are present and well formed, with a `webhook-id` of at most 255 characters, counted in code points; one `v1,` signature in `webhook-signature` matches the HMAC of `id.timestamp.body` with one of the configured secrets (compared in constant time; several secrets can be listed while the payment provider rotates); the signed timestamp is within 5 minutes of now, in either direction; the body is JSON. A request that fails gets a 401 with a generic message. The reason never goes to the sender; it goes to the `verification-failed` event, with the receiver's name. A signed body that isn't JSON gets a 400 from the framework's body parser before the decorator sees it, so no event is emitted for it.
+What the decorator checks, in order: the three `webhook-` headers are present and well formed, with a `webhook-id` of at most 255 characters, counted in code points; one `v1,` signature in `webhook-signature` matches the HMAC of `id.timestamp.body` with one of the configured secrets (compared in constant time; several secrets can be listed while the payment provider rotates); the signed timestamp is within 5 minutes of now, in either direction; the body is JSON. A request that fails gets a 401 with a generic message. The reason never goes to the sender; it goes to the `verification-failed` event, with the receiver's name. A signed body that isn't JSON gets a 400 from the framework's body parser before the decorator sees it, so no event is emitted for it. The same holds for a body over the body parser's size limit (100 kB on Express and 1 MiB on Fastify by default): it gets a 413 before the decorator runs, and no event is emitted. If the payment provider sends larger bodies, raise the limit with `useBodyParser()`, as described in [Raw body](/faq/raw-body#body-parser-size-limit).
 
 Then comes deduplication. The payment provider retries until it gets a 2xx, so a timeout after the handler succeeded makes it send the same `webhook-id` again. The receiver keeps an inbox of the ids it processed (the outbox's inbox, consumer `webhooks:payments`): a known id is answered with an empty 200 without running the handler, and an id is recorded only after the handler succeeded, so a handler that threw is run again on the payment provider's retry. Two copies arriving together at one instance run the handler once; two instances receiving them at the same moment could both run it, which is what the next paragraph is for.
 
@@ -1513,7 +1517,7 @@ const CARRIER_SECRET = 'carrier_test_secret';
 
 describe('Order webhooks', () => {
   const client = new PGlite(); // PostgreSQL, in-process
-  const db = drizzle(client, { schema });
+  const db = drizzle({ client });
   const transport = new InMemoryWebhookTransport(); // records requests instead of sending them
   const partner = { id: 'northside', name: 'Northside Pet Supplies' };
   let app: INestApplication;
@@ -1633,7 +1637,7 @@ Incoming webhooks run their handler **once per webhook id and receiver in the co
 #### Production checklist
 
 - Keep the endpoints and the deliveries in your application's database, on a database server: register `PostgresWebhookStore`, or `MySqlWebhookStore`, and the outbox's store next to it ([Keep webhooks in your database](/http/webhooks#keep-webhooks-in-your-database)). The production guard refuses to start in memory; `allowInMemoryStorage` is for a process whose pending deliveries you can afford to lose.
-- Apply both stores' migrations before a new version starts, with `npx nest-webhooks migrate` and `npx nest-outbox migrate` or your migration tool, and check them in CI with `status`. With `NODE_ENV=production`, the stores don't migrate at startup: a schema that's behind fails it instead.
+- Apply both stores' migrations before a new version starts, with `npx @nestjs/webhooks migrate` and `npx @nestjs/outbox migrate` or your migration tool, and check them in CI with `status`. With `NODE_ENV=production`, the stores don't migrate at startup: a schema that's behind fails it instead.
 - On PostgreSQL, keep the database's default isolation at READ COMMITTED: the stores refuse a stricter one. On MySQL, run a transaction again when MySQL breaks a deadlock in it (error 1213): it rolled back, with the messages it dispatched and the webhooks it recorded.
 - Leave `delivery.allowHttp` and `delivery.allowPrivateNetworks` off. A partner's URL is untrusted input, and the transport resolves it itself and pins the address it checked. Use `allowedAddresses` for the one private range you really deliver to, and alert on `destination-blocked` events: a customer pointing a webhook at your metadata service is worth a look.
 - Run the worker in a few instances (`WEBHOOKS_WORKER`), not in every API pod: each claim is a short transaction, and the leases keep them from sending the same delivery twice.
@@ -1769,7 +1773,7 @@ Each executor takes your database client, and its own kind of transaction object
 
 The store's `migrate()` method applies the pending migrations at once, whatever the `migrate` option says, and resolves with the versions it applied. `PostgresWebhookStore.migrationSql()` and `MySqlWebhookStore.migrationSql()` return their SQL, with the bookkeeping. Their options are the `schema`, the versions to go `from` (default `0`, a new database) and `to` (default: the one the package needs), and `statementBreakpoints`, which puts drizzle-kit's `--> statement-breakpoint` between the statements. On PostgreSQL, from version 0, the SQL starts with `CREATE SCHEMA IF NOT EXISTS`, which needs the CREATE privilege on the database: leave it out if someone created the schema for you. `MySqlWebhookStore.migrationStatements()` returns MySQL's statements one per string, to run in order, each once. `schemaVersion` is the version the package needs. A schema's own version is the highest applied in its `migrations` table.
 
-The command line, `npx nest-webhooks`, takes `--url` (default `DATABASE_URL`), whose scheme picks the store: `postgres://` or `postgresql://` for `PostgresWebhookStore`'s schema, `mysql://` for `MySqlWebhookStore`'s tables. It takes `--schema` too (default `nest_webhooks`). `npx nest-outbox` does the same for the outbox's stores:
+The command line, `npx @nestjs/webhooks`, takes `--url` (default `DATABASE_URL`), whose scheme picks the store: `postgres://` or `postgresql://` for `PostgresWebhookStore`'s schema, `mysql://` for `MySqlWebhookStore`'s tables. It takes `--schema` too (default `nest_webhooks`). `npx @nestjs/outbox` does the same for the outbox's stores:
 
 | Command | What it does |
 | --- | --- |

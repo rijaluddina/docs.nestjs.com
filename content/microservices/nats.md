@@ -46,11 +46,11 @@ The `options` object is specific to the chosen transporter. The <strong>NATS</st
   </tr>
   <tr>
     <td><code>gracefulShutdown</code></td>
-    <td>Enables graceful shutdown. When enabled, the server first unsubscribes from all subjects, then waits for <code>gracePeriod</code> before closing the connection. Default is <code>false</code>.</td>
+    <td>Enables graceful shutdown. When enabled, the server first unsubscribes from all subjects, then waits for the requests and events being handled before closing the connection. Default is <code>false</code>.</td>
   </tr>
   <tr>
     <td><code>gracePeriod</code></td>
-    <td>Time in milliseconds to wait after unsubscribing from all subjects when <code>gracefulShutdown</code> is enabled. Default is <code>10000</code> ms.</td>
+    <td>Longest time in milliseconds to wait for the requests and events being handled when <code>gracefulShutdown</code> is enabled. The server closes sooner when they are done before that. Default is <code>10000</code> ms.</td>
   </tr>
   <tr>
     <td><code>headers</code></td>
@@ -58,11 +58,13 @@ The `options` object is specific to the chosen transporter. The <strong>NATS</st
   </tr>
 </table>
 
+> info **Hint** A handler that returns a stream which never completes is still being handled, so closing the server then takes the whole `gracePeriod`.
+
 #### Client
 
-As with other microservice transporters, you have <a href="/microservices/basics#client">several options</a> for creating a NATS `ClientProxy` instance.
+As with other microservice transporters, you have <a href="/microservices/basics#client-producer-class">several options</a> for creating a NATS `ClientProxy` instance.
 
-One way to create an instance is to use the `ClientsModule`. Import it and use its `register()` method to pass an options object with the same properties shown above for the `createMicroservice()` method, plus a `name` property to use as the injection token. Read more about the `ClientsModule` in the <a href="/microservices/basics#client">client section of the overview</a>.
+One way to create an instance is to use the `ClientsModule`. Import it and use its `register()` method to pass an options object with the same properties shown above for the `createMicroservice()` method, plus a `name` property to use as the injection token. Read more about the `ClientsModule` in the <a href="/microservices/basics#client-producer-class">client section of the overview</a>.
 
 ```typescript
 @Module({
@@ -81,7 +83,7 @@ One way to create an instance is to use the `ClientsModule`. Import it and use i
 })
 ```
 
-You can also create a client with `ClientProxyFactory` or the `@Client()` decorator. Both are described in the <a href="/microservices/basics#client">client section of the overview</a>.
+You can also create a client with `ClientProxyFactory` or the `@Client()` decorator. Both are described in the <a href="/microservices/basics#client-producer-class">client section of the overview</a>.
 
 #### Request-response
 
@@ -206,6 +208,20 @@ export class ApiModule {}
 ```
 
 Headers set on a record take precedence over the client-level `headers` option.
+
+Starting with NestJS v12.1.3, a message handler can also return a record. Nest sends the record data as the reply and the record headers as the headers of the reply message:
+
+```typescript
+import * as nats from '@nats-io/nats-core';
+
+@MessagePattern('replace-emoji')
+replaceEmoji() {
+  const headers = nats.headers();
+  headers.set('x-version', '1.0.0');
+
+  return new NatsRecordBuilder(':cat:').setHeaders(headers).build();
+}
+```
 
 #### Custom serializers and deserializers
 

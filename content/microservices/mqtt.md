@@ -37,11 +37,15 @@ const app = await NestFactory.createMicroservice(AppModule, {
 
 The `options` object is specific to the chosen transporter. The <strong>MQTT</strong> transporter exposes the [MQTT.js client options](https://github.com/mqttjs/MQTT.js/#mqttclientstreambuilder-options), as well as the `url`, `subscribeOptions` (see [Quality of Service](#quality-of-service-qos)), and `userProperties` (see [record builders](#record-builders)) properties. On the server, the `maxConnectionAttempts` property limits the number of attempts to establish the initial connection (default: `-1`, i.e., unlimited). The limit doesn't apply to reconnections after the server has connected.
 
+Also on the server, the `gracefulShutdown` option enables graceful shutdown: when the server closes, it first unsubscribes from its topics, then waits for the requests and events being handled before ending its connection (default: `false`). The `gracePeriod` option sets the longest time to wait, in milliseconds (default: `10000`). With a persistent session (`clean: false`, plus a `sessionExpiryInterval` on MQTT 5), unsubscribing removes the subscriptions from the session, so QoS 1 and 2 messages published to a non-shared subscription while the instance restarts are not queued for it.
+
+> info **Hint** A handler that returns a stream which never completes is still being handled, so closing the server then takes the whole `gracePeriod`.
+
 #### Client
 
-As with other microservice transporters, you have <a href="/microservices/basics#client">several options</a> for creating an MQTT `ClientProxy` instance.
+As with other microservice transporters, you have <a href="/microservices/basics#client-producer-class">several options</a> for creating an MQTT `ClientProxy` instance.
 
-One way to create an instance is to use the `ClientsModule`. Import it and use its `register()` method to pass an options object with the same properties shown above for the `createMicroservice()` method, plus a `name` property to use as the injection token. Read more about the `ClientsModule` in the <a href="/microservices/basics#client">client section of the overview</a>.
+One way to create an instance is to use the `ClientsModule`. Import it and use its `register()` method to pass an options object with the same properties shown above for the `createMicroservice()` method, plus a `name` property to use as the injection token. Read more about the `ClientsModule` in the <a href="/microservices/basics#client-producer-class">client section of the overview</a>.
 
 ```typescript
 @Module({
@@ -60,7 +64,7 @@ One way to create an instance is to use the `ClientsModule`. Import it and use i
 })
 ```
 
-You can also create a client with `ClientProxyFactory` or the `@Client()` decorator. Both are described in the <a href="/microservices/basics#client">client section of the overview</a>.
+You can also create a client with `ClientProxyFactory` or the `@Client()` decorator. Both are described in the <a href="/microservices/basics#client-producer-class">client section of the overview</a>.
 
 #### Context
 
@@ -229,6 +233,18 @@ import { ClientProxyFactory, Transport } from '@nestjs/microservices';
 export class ApiModule {}
 ```
 
+Starting with NestJS v12.1.3, a message handler can also return a record. Nest sends the record data as the reply and applies the record options (for example, the QoS level and the properties) to the reply message:
+
+```typescript
+@MessagePattern('replace-emoji')
+replaceEmoji() {
+  return new MqttRecordBuilder(':cat:')
+    .setProperties({ userProperties: { 'x-version': '1.0.0' } })
+    .setQoS(1)
+    .build();
+}
+```
+
 #### Instance status updates
 
 To get real-time updates on the connection and the state of the underlying driver instance, subscribe to the `status` stream. This stream provides status updates specific to the chosen driver. For the MQTT driver, the `status` stream emits `connected`, `disconnected`, `reconnecting`, and `closed` events.
@@ -269,6 +285,8 @@ server.on<MqttEvents>('error', (err) => {
 ```
 
 > info **Hint** The `MqttEvents` type is imported from the `@nestjs/microservices` package.
+
+Starting with NestJS v12.1.2, listeners registered with the client's `on()` method stay registered until you call `close()`, so they are also attached to the new MQTT client created on the next `send()` or `emit()` call after the previous one closed without reconnecting (for example, when `reconnectPeriod` is `0`). Registrations are not deduplicated, so register each listener once rather than again from its callback or after each reconnect.
 
 #### Underlying driver access
 

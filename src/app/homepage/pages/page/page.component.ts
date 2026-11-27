@@ -1,3 +1,4 @@
+import { isPlatformBrowser, PlatformLocation } from '@angular/common';
 import {
   AfterViewChecked,
   AfterViewInit,
@@ -6,6 +7,9 @@ import {
   ElementRef,
   ChangeDetectionStrategy,
   inject,
+  Injectable,
+  PLATFORM_ID,
+  Renderer2,
 } from '@angular/core';
 import { Meta } from '@angular/platform-browser';
 import * as Prism from 'prismjs';
@@ -15,6 +19,8 @@ import 'prismjs/components/prism-graphql';
 import 'prismjs/components/prism-json';
 import 'prismjs/components/prism-yaml';
 import 'prismjs/components/prism-bash';
+import 'prismjs/components/prism-java';
+import 'prismjs/components/prism-csharp';
 
 /** Roughly what a search result shows before it cuts the snippet off. */
 const DESCRIPTION_MAX_LENGTH = 160;
@@ -47,20 +53,43 @@ function summarize(text: string): string {
   );
 }
 
+/**
+ * Whether the app has rendered a page yet. One per app, so prerendering, which
+ * starts an app per page, renders each page as the first.
+ */
+@Injectable({ providedIn: 'root' })
+class FirstPageTracker {
+  rendered = false;
+}
+
 @Component({
     selector: 'app-base-page',
     template: ``,
-    changeDetection: ChangeDetectionStrategy.Eager,
+    changeDetection: ChangeDetectionStrategy.OnPush,
     standalone: true,
 })
 export class BasePageComponent implements AfterViewChecked, AfterViewInit {
+  private readonly applicationRef = inject(ApplicationRef);
+  private readonly el = inject(ElementRef);
+  private readonly platformLocation = inject(PlatformLocation);
+  private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
+
   private isHljsInitialized = false;
   private readonly metaService = inject(Meta);
 
-  constructor(
-    private readonly applicationRef: ApplicationRef,
-    private readonly el: ElementRef,
-  ) {}
+  constructor() {
+    // The first page of a visit is prerendered: it is on screen before the app
+    // starts, and the app then renders it again. The page-enter animation
+    // (src/styles.scss) would play on both, the second restarting the first
+    // mid-way, so the first page skips it and only navigations animate.
+    // (Router.navigated can't tell: the first navigation has ended by the time
+    // the root component, and so this page, is created.)
+    const firstPage = inject(FirstPageTracker);
+    if (!firstPage.rendered) {
+      firstPage.rendered = true;
+      inject(Renderer2).addClass(this.el.nativeElement, 'initial-page');
+    }
+  }
 
   get nativeElement(): HTMLElement {
     return this.el.nativeElement;
@@ -82,7 +111,7 @@ export class BasePageComponent implements AfterViewChecked, AfterViewInit {
    * heading anchors build their links.
    */
   private resolveFragmentLinks() {
-    const path = window.location.pathname;
+    const path = this.platformLocation.pathname;
     const links = this.nativeElement.querySelectorAll<HTMLAnchorElement>(
       'a[href^="#"]',
     );
@@ -123,6 +152,10 @@ export class BasePageComponent implements AfterViewChecked, AfterViewInit {
         this.isHljsInitialized = true;
       }
     });
-    setTimeout(() => this.applicationRef.tick(), 1000);
+    // A prerendered page is written once the app is stable, so this delay
+    // would hold up every page of the build by a second.
+    if (this.isBrowser) {
+      setTimeout(() => this.applicationRef.tick(), 1000);
+    }
   }
 }

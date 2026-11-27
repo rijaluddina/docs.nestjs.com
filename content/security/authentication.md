@@ -2,6 +2,8 @@
 
 `@nestjs/authentication` signs users in and tells the rest of your application who they are. It registers a global guard, gives you decorators and an injectable context to read the current user, and ships the parts every sign-in flow needs: server-side sessions, password hashing, email verification and password reset links, TOTP two-factor authentication, magic links, OpenID Connect, access and refresh tokens, and API keys. All of them are built on Node.js built-ins, and they keep their state in your database through a store you write against documented interfaces, with the package's tests to check it. You write what only your application knows: how to load a user, which routes are public, and the endpoints of your sign-in flows.
 
+> info **Hint** For a complete API built on token sign-in, from an empty project to production, follow [Build a REST API with JWT authentication in Node.js](/tutorials/rest-api-jwt-authentication).
+
 In this tutorial, you'll add sign-in to the API of an online store for cat food and supplies. By the end, it will:
 
 - Sign customers in with a password, with Google, or with a link sent by email, and keep the web app signed in with a session cookie.
@@ -319,7 +321,7 @@ export class CredentialsService {
 ```
 
 - `verify()` with no stored hash checks the password against a dummy hash. An unknown email and a wrong password take the same time and produce the same answer, so neither reveals which emails have accounts.
-- Passwords are hashed with scrypt from `node:crypto`, at the parameters OWASP recommends (N=2^17, r=8, p=1: about 128 MiB of memory per hash), on the libuv thread pool. That's a memory-hard function, which bcrypt isn't, and it needs no native dependency. Every hash records the parameters it was made with (`$scrypt$ln=17,r=8,p=1$...`). When you raise the cost with the `password` option, `needsRehash()` tells you which stored hashes to upgrade, and the only moment you can do that is while the user signs in. The cost has a ceiling of 1 GiB of memory and 16 times the default work per hash, so with `r` at 8, `logN` stops at 20. Parameters beyond it fail at startup, and a stored hash made with them never verifies.
+- Passwords are hashed with scrypt from `node:crypto`, at the parameters OWASP recommends (N=2^17, r=8, p=1: about 128 MiB of memory per hash), on the libuv thread pool. That's a memory-hard function, which bcrypt isn't, and it needs no native dependency. Every hash records the parameters it was made with (`$scrypt$ln=17,r=8,p=1$...`). When you raise the cost with the `password` option, `needsRehash()` tells you which stored hashes to upgrade, and the only moment you can do that is while the user signs in. Until then, `verify()` tops up the check of an older, cheaper hash to the work of the new parameters, so it still takes as long as an unknown email. Lowering the cost can't be hidden that way: a hash made with the costlier parameters takes longer to check until it's upgraded. The cost has a ceiling of 1 GiB of memory and 16 times the default work per hash, so with `r` at 8, `logN` stops at 20. Parameters beyond it fail at startup, and a stored hash made with them never verifies.
 - `register()` leaves the address unverified. Typing an email into a sign-up form doesn't prove you own it.
 
 The controller turns a verified password into a session:
@@ -680,6 +682,19 @@ export class PasswordResetMailer extends PasswordResetHandler {
 
 `findUser()` returns the account's id, its stored address and its stored password hash, `null` for an account without a password. The link goes to that stored address, never to the one typed into the form: a lookup that ignores accents or dots, as MySQL's default collation does, would otherwise mail one customer's link to whoever typed a lookalike address. A link works only while the address and the hash are unchanged, so a password change, by any route, invalidates the links sent before it. Leaving the address or the hash out is an error, which the package logs instead of sending the link.
 
+If your application hashes passwords with something other than `PasswordHasher`, such as argon2 or bcrypt, give the handler a `hashPassword()` method. `reset()` then stores the hash it returns instead of a scrypt one, so the new password is in the format your sign-in checks:
+
+```typescript
+@@filename(src/auth/password-reset.mailer)
+import * as argon2 from 'argon2';
+// ...
+hashPassword(password: string) {
+  return argon2.hash(password);
+}
+```
+
+It receives the password as the customer typed it, once `reset()` has accepted it: not empty and at most 4 KiB. A stricter limit of your hasher, such as bcrypt's 72 bytes, is yours to check before you call `reset()`. When `hashPassword()` throws, the password and the sign-ins stay as they were, and the link works again.
+
 Enable password reset next to email verification, the handler in `AuthModule` and the page in the options:
 
 ```typescript
@@ -775,7 +790,7 @@ export class PasswordResetController {
 
 - `request()` returns before it looks the address up. Finding the account, storing the token and sending the email happen after the response, so a request for an address nobody registered gets the same 202, in the same time, as a customer's: the route can't tell anyone who has an account. That's why `forgot` doesn't `await` anything. A failure after the response, such as a mail server that is down, is logged.
 - A link works once, for an hour (`passwordReset.ttl`), and only while the account still has the address and the password it had when the link was sent.
-- `reset()` stores the new password's hash, invalidates the customer's other reset links, and ends every session of the account, and every refresh token once the application [issues them](/security/authentication#issue-tokens-to-the-mobile-app), so whoever knew the old password is signed out everywhere. [API keys](/security/authentication#issue-api-keys-to-partners) live in your own table and stay valid: to cut them off too, revoke them on the `password-reset` event. A password that `PasswordHasher` refuses, empty or over 4 KiB, gets `null` without spending the link, so the customer can try again. With `signIn: true`, it then signs the customer in on this browser through `SignInService`, so a customer with [two-factor authentication](/security/authentication#add-two-factor-authentication) still has to enter a code.
+- `reset()` stores the new password's hash, invalidates the customer's other reset links, and ends every session of the account, and every refresh token once the application [issues them](/security/authentication#issue-tokens-to-the-mobile-app), so whoever knew the old password is signed out everywhere. [API keys](/security/authentication#issue-api-keys-to-partners) live in your own table and stay valid: to cut them off too, revoke them on the `password-reset` event. A password that is empty or over 4 KiB gets `null` without spending the link, so the customer can try again. With `signIn: true`, it then signs the customer in on this browser through `SignInService`, so a customer with [two-factor authentication](/security/authentication#add-two-factor-authentication) still has to enter a code.
 - The link proves the address too, so `reset()` marks it verified, through your `markVerified()`. That also rescues an account that someone else signed up for with the customer's address: the reset replaces the stranger's password and signs them out.
 
 With the Zod schemas:
@@ -1013,7 +1028,7 @@ export class JwtAuth extends JwtBearerProvider<User> {
 }
 ```
 
-> info **Hint** HS256 with a shared secret suits an API that both issues and verifies its tokens. If other services verify them too, make the `accessToken` key an ES256 private key: `JwtAuth` then verifies with its public half, and so can they. To accept tokens from another issuer instead, pass `super()` its `jwks` URL, which must be https (plain http only on localhost), or its public `key`, with `issuer` and `audience`: both are required, because an identity provider signs every client's tokens with the same keys. For tokens without an audience, pass `audience: false` and check the claim that names your client in `validate()`. Add `clockTolerance: '30s'` for another issuer's clock. Keys are PEM text or a `KeyObject`; import a JWK with `createPublicKey()` from `node:crypto`, passing the JWK as `key` and `'jwk'` as `format`. An empty `key` or `jwks`, such as an unset environment variable, fails at startup instead of falling back to the `accessToken` options. A service that only verifies tokens can leave `accessToken` out entirely and give `super()` what it verifies with: the shared `key`, or the `jwks` with `issuer` and `audience`.
+> info **Hint** HS256 with a shared secret suits an API that both issues and verifies its tokens. If other services verify them too, make the `accessToken` key an ES256 private key: `JwtAuth` then verifies with its public half, and so can they. To accept tokens from another issuer instead, pass `super()` its `jwks` URL, which must be https (plain http only on localhost), or its public `key`, with `issuer` and `audience`: both are required, because an identity provider signs every client's tokens with the same keys. For tokens without an audience, pass `audience: false` and check the claim that names your client in `validate()`. Add `clockTolerance: '30s'` for another issuer's clock, and `maxAge: '1h'` to reject tokens issued longer ago. A `jwks` accepts `RS256` and `ES256` by default: if your issuer signs with another algorithm, list it in `algorithms`, such as `['PS256']`. `HS` algorithms are refused with a `jwks`. To share one key set between several providers, pass a `JwksClient` as `jwks` instead of a URL; it takes `cacheTtl` (default `'10m'`), `cooldown` (default `'30s'`) and `timeout` (default `'5s'`). Keys are PEM text or a `KeyObject`; import a JWK with `createPublicKey()` from `node:crypto`, passing the JWK as `key` and `'jwk'` as `format`. An empty `key` or `jwks`, such as an unset environment variable, fails at startup instead of falling back to the `accessToken` options. A service that only verifies tokens can leave `accessToken` out entirely and give `super()` what it verifies with: the shared `key`, or the `jwks` with `issuer` and `audience`.
 
 Provide it in `AuthModule`:
 
@@ -1071,6 +1086,25 @@ export class TokensController {
 `TokenService.issue()` signs an access token with the `accessToken` options, starts a refresh token, and returns both, with `expiresIn`, the access token's lifetime in seconds. Refresh tokens are opaque, and stored as hashes. Each one works once: `refresh()` spends it and returns its successor, with a new access token. The successors of one sign-in form a family. If a spent token comes back, two parties hold it, a thief and the app, so the service revokes the whole family and both have to sign in again. A refresh token that is unknown, expired or reused throws `RefreshTokenError`, an `AuthenticationError`, which the module answers with a 401, so `refresh` needs no error handling of its own.
 
 The `amr` claim records how the user signed in, and [two-factor authentication](/security/authentication#add-two-factor-authentication) relies on it. `issue()` stores the `claims` with the refresh-token family, and `refresh()` puts them into every access token it mints, so refreshed tokens describe the same sign-in. Keep facts that can change, such as roles, out of `claims`: they would stay in the tokens for as long as the family lives. `validate()` loads the current user on every request instead.
+
+Some claims describe the session rather than the user, such as the workspace a multi-tenant app is working in. To change one, pass `refresh()` a `claims` function. It receives a copy of the family's claims and the user's ID, and returns the claims for the new access token and for every later refresh of the family. It can be async, and it can throw to refuse the change, which leaves the refresh token unspent:
+
+```typescript
+@Post('workspace')
+@HttpCode(200)
+switchWorkspace(@Body() { refreshToken, workspaceId }: SwitchWorkspaceDto) {
+  return this.tokenService.refresh(refreshToken, {
+    claims: async (claims, userId) => {
+      if (!(await this.workspacesService.isMember(userId, workspaceId))) {
+        throw new ForbiddenException();
+      }
+      return { ...claims, workspace: workspaceId };
+    },
+  });
+}
+```
+
+The service ignores `amr`, `auth_time` and the registered JWT claims (`sub`, `iss`, `exp` and the rest) in what the function returns: `amr` and `auth_time` keep their values from the sign-in, and the service sets the others as on any refresh, so a switch can't change the user or add a second factor. Like two refreshes of the same token, a switch and a refresh sent at the same time count as a reuse, so the client should wait for one to finish before it starts the other.
 
 A service that signs short-lived access tokens and has its clients sign in again can turn refresh tokens off. With `refreshToken` set to `false`, `issue()` returns `accessToken` and `expiresIn` alone, and stores nothing, so the application needs no `RefreshTokenStore`. The token endpoint's response has no refresh token: clients sign in again when the access token expires. `refresh()` and `revoke()` throw, saying refresh tokens are disabled, and `revokeAll()` does nothing. The second factor and the `amr` claim work as before. Declare `refreshTokens: false` on `AuthenticationTypes` too, so `issue()` is typed to return an `AccessTokenResult` rather than a `TokenPair`:
 
@@ -1371,6 +1405,8 @@ async disable(
 
 #### Add "Sign in with Google"
 
+> info **Hint** This section signs a browser in with a session cookie. For an API with bearer tokens, where the web or mobile app gets an ID token from Google's own sign-in library and the API exchanges it for its own JWTs, follow [Add Google login to a Node.js API](/tutorials/google-login).
+
 In the Google Cloud console, create an OAuth client ID of type **Web application**, and add this authorized redirect URI (and the production one, when you deploy):
 
 ```bash
@@ -1547,6 +1583,54 @@ providers: [
 
 The `github()` preset works the same way. `microsoft()` also takes your directory's tenant id as its `tenant` option, next to `clientId` and `clientSecret`: a GUID from the Overview page of the Microsoft Entra admin center, such as `process.env.ENTRA_TENANT_ID`. A domain, or the multi-tenant `common`, `organizations` and `consumers`, fails at startup: for those, Microsoft publishes another issuer than the one asked for, and every sign-in would fail. Add them next to `google` in `providers`, and register the callback URL with each of them, with its name in place of `google`.
 
+An application served under several domains, such as one domain per customer, can't name a single callback URL: a login started on one domain must come back to that domain. Pass a function of the request as `callbackUrl` instead. `start()` calls it on the login, and `finish()` calls it again on the callback, so it must return the same URL for both. Compare the host with your own list of domains rather than trusting the header, and register every URL it can return with each provider:
+
+```typescript
+@@filename(src/app.module)
+oidc: {
+  callbackUrl: ({ headers }) => {
+    const host = CUSTOMER_DOMAINS.find((domain) => domain === headers.host);
+    if (!host) {
+      throw new NotFoundException();
+    }
+    return `https://${host}/auth/oidc/:provider/callback`;
+  },
+  providers: {
+    // ...
+  },
+},
+```
+
+The function can also be `async`, to look the domains up in your database. Whatever it throws is the login's answer, like the 404 above for a domain the application doesn't serve, and a URL that isn't absolute fails the login with an error that names the function. The `__Host-oidc_tx` cookie belongs to the domain that set it, so a login finishes on the domain where it started. If the function ever returned another URL on the callback, the provider would refuse the code, and the callback would get a 401. Behind a proxy that rewrites the host, read the header it forwards instead, such as `X-Forwarded-Host`, and only from a proxy you trust.
+
+Some applications only learn their providers at runtime. An application that sells to businesses may give each customer its own OIDC client, or let them bring their own identity provider, set up from an admin page and stored in your database. Pass a function of the provider's name as `providers` instead. `start()` calls it on the login, and `finish()` calls it again on the callback. Return the provider's configuration, or `undefined` for a name you don't serve, which gets a 404:
+
+```typescript
+@@filename(src/app.module)
+AuthenticationModule.forRootAsync({
+  imports: [TenantsModule],
+  inject: [TenantsRepository],
+  useFactory: (tenantsRepository: TenantsRepository) => ({
+    // ...
+    oidc: {
+      callbackUrl: `${process.env.APP_URL}/auth/oidc/:provider/callback`,
+      // GET /auth/oidc/acme/login signs in through Acme's own client.
+      providers: async (name) => {
+        const tenant = await tenantsRepository.findByKey(name);
+        return tenant ? { issuer: tenant.issuer, clientId: tenant.clientId, clientSecret: tenant.clientSecret } : undefined;
+      },
+    },
+  }),
+}),
+```
+
+The configuration is looked up again on the callback rather than stored with the login, so a secret you rotate in your database is used from the next call on, by a login already under way too. Each configuration the function returns gets the checks the object form gets at startup: one without a `clientId`, or without a `clientSecret` unless its `tokenEndpointAuthMethod` is `'none'`, fails the login with an error that names the function. The function runs on every login and callback, so cache the lookup if it's slow. The package caches each provider's discovery document and keys by issuer, so customers who sign in through the same provider share them.
+
+Identities are linked by (provider, subject), and the provider is the name, so each name must stand for one client of one provider. Put the customer in the name, like `acme` above, rather than using one name, such as `okta`, for every customer's provider: two customers' providers can give out the same subject. When customers bring their own identity provider, two more things change:
+
+- **Their provider vouches for whatever address it likes.** It can mark any address as verified, including the address of another customer's user. The resolver above links accounts by verified email. With providers your customers control, link by email only to that customer's own accounts, or not at all.
+- **The issuer is user input.** The package fetches the discovery document, the keys and the tokens from the URLs the configuration names, and nothing keeps those requests off your own network. Check an issuer a customer enters against the providers you support before you store it.
+
 #### Add magic-link sign-in
 
 A magic link signs a customer in from their inbox, without a password. The package creates and checks the links; delivering them is up to you, through a `MagicLinkHandler`. The store emails them like the verification links, with a template and a mail class of their own:
@@ -1667,7 +1751,7 @@ export class MagicLinkController {
 
 - The request route answers 202 whether or not the address has an account, and the account is only created once the link is used. A request posted from another site's page gets a 403, as a sign-in does: that page could otherwise set this browser's transaction cookie for a link to its author's address, then get the customer to open it (login CSRF).
 - `consume()` burns the token, calls `resolveUser()`, and signs the user in through `SignInService`, which sets the cookie, so two-factor authentication still applies. `resolveUser()` returns the account with its stored `email`, and the link signs the account in only if that is the address the link was sent to, compared trimmed, lowercased and in Unicode NFC. A lookup that ignores accents or dots, as MySQL's default collation does, can't hand one mailbox another customer's account: `consume()` returns `null` instead.
-- A link works only in the browser that asked for it. `create()` sets a transaction cookie, `__Host-magic_link_tx`, and `consume()` refuses the token without it, before looking anything up: it throws a `MagicLinkError`, and the module answers it with a 401 whose `error` is `not_this_browser` and whose message tells the customer to open the link in the browser they requested it from, or to request a new one here. Otherwise anyone could request a link for their own address and get a customer to open it, which would sign the customer's browser in to the attacker's account (login CSRF). The refused link stays valid in the browser that requested it, and the answer reveals nothing about the token, since a made-up one gets it too. So a customer who asks for a link on the laptop and opens the email on the phone is told to open it on the laptop, or to ask for a new link on the phone, which then works there; an application that would rather let the link itself work on the phone sets `bindToBrowser: false` in the `magicLink` options. Unknown, used and expired links, and addresses the handler refuses, get the controller's one generic answer: `consume()` returns `null` for all of them, and only the `magic-link-refused` event says which it was.
+- A link works only in the browser that asked for it. `create()` sets a transaction cookie, `__Host-magic_link_tx`, and `consume()` refuses the token without it, before looking anything up: it throws a `MagicLinkError`, and the module answers it with a 401 whose `error` is `not_this_browser` and whose message tells the customer to open the latest link in the browser they requested it from, or to request a new one here. Otherwise anyone could request a link for their own address and get a customer to open it, which would sign the customer's browser in to the attacker's account (login CSRF). The refused link stays valid in the browser that requested it, and the answer reveals nothing about the token, since a made-up one gets it too. The cookie keeps the last five links the browser requested, so a customer who clicks "Resend" and then opens the first email is still signed in; a link older than those five gets the same 401. So a customer who asks for a link on the laptop and opens the email on the phone is told to open it on the laptop, or to ask for a new link on the phone, which then works there; an application that would rather let the link itself work on the phone sets `bindToBrowser: false` in the `magicLink` options. Unknown, used and expired links, and addresses the handler refuses, get the controller's one generic answer: `consume()` returns `null` for all of them, and only the `magic-link-refused` event says which it was.
 - Using the link proves the address, so accounts created by a link are verified. An account created with a password is different while its address is unverified: the link proves who owns the address now, not who chose the password, so the handler refuses it with a 403 rather than handing a pre-hijacked account to its owner. Once the owner has used the [verification link](/security/authentication#verify-email-addresses), or [reset the password](/security/authentication#reset-forgotten-passwords), magic links work for that account too.
 - `redirectTo` survives the round trip only if it's a relative path, such as `/orders`.
 
@@ -1849,75 +1933,108 @@ Rotate the session whenever privileges change, for example after a password chan
 $ npm i --save @nestjs/throttler
 ```
 
-Throttling by IP alone is too coarse for sign-in. It lets one client try passwords for many accounts, and customers behind the same network address share a limit. Track the email and the IP address together wherever the request body names an account:
+A limit per IP address alone is too coarse for sign-in. Customers behind the same network address share it, so it can't be low enough to stop one client from guessing at one account. Use two [throttler definitions](/security/rate-limiting#multiple-throttler-definitions); each request counts against both. `default` counts per IP address, on every route. `account` counts per email and IP address, wherever the request body names an account:
 
 ```typescript
-@@filename(src/auth/auth-throttler.guard)
-import { Injectable } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
-
-/** Per IP everywhere; per (email, IP) where the request body names an account. */
-@Injectable()
-export class AuthThrottlerGuard extends ThrottlerGuard {
-  protected async getTracker(req: Record<string, any>): Promise<string> {
-    const ip = await super.getTracker(req);
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim().normalize('NFC').toLowerCase() : '';
-    return email ? `${email}|${ip}` : ip;
-  }
+@@filename(src/auth/account-email)
+/** The address the request body names, trimmed, lowercased and in Unicode NFC, or `''`. */
+export function accountEmail(req: { body?: { email?: unknown } }): string {
+  const email = req.body?.email;
+  return typeof email === 'string' ? email.trim().normalize('NFC').toLowerCase() : '';
 }
 ```
 
-Register `ThrottlerModule` with a default limit of 100 requests a minute, and the guard as a global guard:
+Register `ThrottlerModule` with both definitions, and `ThrottlerGuard` as a global guard:
 
 ```typescript
 @@filename(src/app.module)
 import { APP_GUARD, APP_PIPE } from '@nestjs/core';
-import { ThrottlerModule, minutes } from '@nestjs/throttler';
-import { AuthThrottlerGuard } from './auth/auth-throttler.guard.js';
+import { ThrottlerGuard, ThrottlerModule, minutes, normalizeIp } from '@nestjs/throttler';
+import { accountEmail } from './auth/account-email.js';
 // ...
 
 @Module({
   imports: [
-    ThrottlerModule.forRoot([{ ttl: minutes(1), limit: 100 }]),
+    ThrottlerModule.forRoot([
+      // Per IP address, on every route: 100 requests a minute.
+      { name: 'default', ttl: minutes(1), limit: 100 },
+      // Per email and IP address, wherever the request body names an account.
+      {
+        name: 'account',
+        ttl: minutes(15),
+        limit: 5,
+        skipIf: (context) => !accountEmail(context.switchToHttp().getRequest()),
+        getTracker: (req) => `${accountEmail(req)}|${normalizeIp(req.ip)}`,
+      },
+    ]),
     // ...
   ],
   providers: [
     { provide: APP_PIPE, useValue: new ValidationPipe({ whitelist: true }) },
-    { provide: APP_GUARD, useClass: AuthThrottlerGuard },
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}
 ```
 
+The guard runs before validation, so `accountEmail()` checks that `email` is a string. `normalizeIp()` groups IPv6 addresses by their `/64` prefix, as the throttler's own tracker does, so a client can't get a new counter for every address in its subnet.
+
 The guard is registered in the root module, so it runs before the authentication guard. Global guards run in module order, and the root module comes first. That means guessed bearer tokens count against the limit too, rather than only being rejected with a 401.
 
-Finally, tighten the limit on the routes that check a password or send an email. Each `@Throttle()` counts per route, and per email and IP:
+Finally, tighten the limits on the routes that check a password or send an email. Each `@Throttle()` counts per route, and sets both limits: per IP address, and per account:
 
 ```typescript
 @@filename(src/auth/auth.controller)
-@Throttle({ default: { limit: 5, ttl: minutes(15) } })
+@Throttle({
+  default: { limit: 30, ttl: minutes(15) },
+  account: { limit: 5, ttl: minutes(15) },
+})
 @Post('sign-in')
+// ...
+
+@SkipThrottle({ account: true })
+@Throttle({ default: { limit: 10, ttl: hours(1) } })
+@Post('sign-up')
 ```
 
 ```typescript
 @@filename(src/auth/tokens.controller)
-@Throttle({ default: { limit: 5, ttl: minutes(15) } })
+@Throttle({
+  default: { limit: 30, ttl: minutes(15) },
+  account: { limit: 5, ttl: minutes(15) },
+})
 @Post()
 ```
 
 ```typescript
 @@filename(src/auth/magic-link.controller)
-@Throttle({ default: { limit: 3, ttl: minutes(15) } })
+@Throttle({
+  default: { limit: 10, ttl: minutes(15) },
+  account: { limit: 3, ttl: minutes(15) },
+})
 @Post()
 ```
 
 ```typescript
 @@filename(src/auth/password-reset.controller)
-@Throttle({ default: { limit: 3, ttl: minutes(15) } })
+import { accountEmail } from './account-email.js';
+// ...
+
+@Throttle({
+  default: { limit: 10, ttl: minutes(15) },
+  // Per address, from any IP address.
+  account: { limit: 3, ttl: minutes(15), getTracker: accountEmail },
+})
 @Post('forgot')
 ```
 
-`Throttle` and `minutes` are imported from `@nestjs/throttler`. The limits on the routes that send email also keep anyone from flooding a customer's inbox from one address. The two-factor codes don't need a throttle of their own: the package locks an account's codes after 5 failures, from any IP address, route or transport. Neither does `POST /auth/password/reset`: a guessed token costs one lookup, and there are 2^256 of them.
+`Throttle`, `SkipThrottle`, `minutes` and `hours` are imported from `@nestjs/throttler`. The limits per IP address are a judgement call, since offices and mobile carriers put many customers behind one address. The `account` limit applies to every route whose request body has an `email`, at 5 requests per 15 minutes unless the route sets its own; `@SkipThrottle({{ '{' }} account: true {{ '}' }})` leaves a route out.
+
+- `forgot` counts per address, whatever the IP address, so nobody can fill a customer's inbox with reset links, from one IP address or many. Someone who uses up that limit only delays the customer's own request: the links they caused went to the customer, and any of them works.
+- The magic-link request keeps the email and IP address together. A link works only in the browser that asked for it, so a limit per address alone would let anyone use up a customer's links from their own browser, and keep the customer from signing in.
+- Sign-up names a new address each time, so it skips the `account` limit and the limit per IP address does the work. Otherwise a customer whose password fails the sign-up rules a few times would be refused.
+
+The two-factor codes don't need a throttle of their own: the package locks an account's codes after 5 failures, from any IP address, route or transport. Neither does `POST /auth/password/reset`: a guessed token costs one lookup, and there are 2^256 of them.
 
 > info **Hint** Behind a load balancer or reverse proxy, every request seems to come from the proxy. Enable `trust proxy`, as described in the throttler's [Proxies](/security/rate-limiting#proxies) section, so the tracker sees client addresses.
 
@@ -2501,8 +2618,8 @@ async function emptyStore(db: Database) {
 
 describe('DrizzleAuthenticationStore on PGlite', () => {
   const client = new PGlite();
-  const db = pglite(client) as unknown as Database;
-  beforeAll(() => migratePglite(pglite(client), { migrationsFolder }));
+  const db = pglite({ client }) as unknown as Database;
+  beforeAll(() => migratePglite(pglite({ client }), { migrationsFolder }));
   afterAll(() => client.close());
 
   for (const c of authenticationStoreContract(() => emptyStore(db), { concurrent: true, maxPending: 3 })) {
@@ -2518,7 +2635,7 @@ describe.skipIf(!postgres)(`DrizzleAuthenticationStore on PostgreSQL${reason ? `
   let db: Database;
   beforeAll(async () => {
     pool = new Pool({ connectionString: await postgres!.createDatabase('authentication_tutorial_store'), max: 10 });
-    db = nodePostgres(pool);
+    db = nodePostgres({ client: pool });
     await migrateNodePostgres(db, { migrationsFolder });
   });
   afterAll(async () => {
@@ -3682,7 +3799,7 @@ describe('Authentication (e2e)', () => {
   const ada = { email: 'ada@example.com', password: 'correct horse battery' };
 
   beforeAll(async () => {
-    const db = drizzle(pglite);
+    const db = drizzle({ client: pglite });
     // The app's migrations, the authentication tables included.
     await migrate(db, { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -3766,7 +3883,7 @@ To sign a test user in without going through a sign-in route, `SessionService.cr
 - **Keep `forgot` from revealing anything.** Answer it the same way whatever happens, as the [`forgot` route](/security/authentication#reset-forgotten-passwords) does, and don't `await` `request()`. Sign-up still answers 409 for an address that has an account; if that matters to you, answer sign-up the same way too, and email the owner instead.
 - **Register the production redirect URI** with Google, and set `APP_URL` to the public origin of the application.
 - **Size the servers for scrypt.** Each hash at the default cost takes 128 MiB, on the libuv threadpool (four threads unless you set `UV_THREADPOOL_SIZE`). Sign-in bursts queue behind each other; the throttler bounds them.
-- **Use shared storage for the throttler**, such as Redis. Its default storage counts in each process's memory, so every instance counts on its own and a restart or deploy resets the counts. Enable `trust proxy` behind a proxy. For guessing spread across many IP addresses, add a second throttler whose tracker is the email alone; it also keeps a customer's inbox from filling up with reset links.
+- **Use shared storage for the throttler**, such as Redis. Its default storage counts in each process's memory, so every instance counts on its own and a restart or deploy resets the counts. Enable `trust proxy` behind a proxy. For password guessing spread across many IP addresses, add a third throttler definition whose tracker is the email alone. Give it a limit well above what a customer mistypes in a day, and skip it on routes other than sign-in and token issuing: anyone who knows the address can use it up, and keep the customer from signing in with a password until it resets.
 - **Rotate sessions on privilege changes** with `SignInService.rotateSession()`. After a password change made while signed in, or when a customer turns two-factor authentication on or off, also end their other sessions and refresh tokens: `SessionService.revokeAll()` with the current session as `except`, and `TokenService.revokeAll()`. Whoever knew the old password may still be signed in. A [password reset](/security/authentication#reset-forgotten-passwords) does this for you.
 - **Handle API keys as secrets.** The table keeps only their hashes, and a key is shown once, when it's created: a leaked database gives nobody a key, and a lost key is revoked and replaced, never shown again. Keys expire after a year, so remind their owners to create the next one while the old one still works. Add the `cat_` pattern to your secret scanner (GitHub secret scanning takes custom patterns) to find keys committed to repositories, and revoke them. Requests made with a key emit no events: log the `keyId` from `@CurrentSession()` where you need to know which key did what. A password reset or a sign-out everywhere leaves keys alone: revoke them on those events if they should cut keys off too.
 - **Keep an audit trail.** `AuthenticationEvents` publishes every sign-in and sign-out, second-factor change, reused refresh token, password reset and email verification, on its `events$` stream and on `node:diagnostics_channel`. Store them where your security team can search them. Alert on repeated `mfa-failed` events with `locked: true` (someone who has the password is guessing codes), and on many `password-reset-requested` events without a `userId` from one source (someone is probing for accounts), and on `session-touch-failed` events, which mean the session store is refusing writes.
@@ -3859,8 +3976,8 @@ A family of refresh tokens counts as revoked when any of its tokens is, so a suc
 | `magicLink.url` | required | The page magic links open. `ttl` defaults to `'15m'`. See [Add magic-link sign-in](/security/authentication#add-magic-link-sign-in). |
 | `magicLink.bindToBrowser` | `true` | Accept a link only in the browser that requested it. |
 | `magicLink.cookie` | `secure: true` | Attributes of the `__Host-magic_link_tx` transaction cookie. |
-| `oidc.callbackUrl` | required | The public callback URL, with `:provider` in place of the provider's name. See [Add "Sign in with Google"](/security/authentication#add-sign-in-with-google). |
-| `oidc.providers` | required | Provider configurations by name, such as `google()`, `github()` and `microsoft()`, which also takes the directory's `tenant` id. |
+| `oidc.callbackUrl` | required | The public callback URL, with `:provider` in place of the provider's name, or a function of the request that returns it. See [Add "Sign in with Google"](/security/authentication#add-sign-in-with-google). |
+| `oidc.providers` | required | Provider configurations by name, such as `google()`, `github()` and `microsoft()`, which also takes the directory's `tenant` id, or a function of the name that returns one. See [Add "Sign in with Google"](/security/authentication#add-sign-in-with-google). |
 | `oidc.redirectAfterLogin` | `/` | Where to land when the login had no `redirectTo`. |
 | `oidc.transactionTtl` | `'10m'` | How long a login may take between the redirect and the callback. |
 | `oidc.cookie` | `secure: true` | Attributes of the `__Host-oidc_tx` transaction cookie. |
@@ -3923,7 +4040,7 @@ Your subclass implements `findKey(id)`, which returns the key's stored `hash`, i
 | `AuthenticationError` | 401 | its `code`, if any | its `code`; else `Unauthorized` with a message, none without | Bad credentials, or `requireUser()` without a user (no message, no code) |
 | `JwtError` | 401 | none | `Unauthorized` | A token is malformed, badly signed, expired, or for another issuer or audience |
 | `RefreshTokenError` | 401 | none | `Unauthorized` | A refresh token is invalid, expired or reused; `reason` says which |
-| `MagicLinkError` | 401 | `not_this_browser` | `not_this_browser` | A magic link was opened in another browser than the one that requested it |
+| `MagicLinkError` | 401 | `not_this_browser` | `not_this_browser` | A magic link was opened in another browser than the one that requested it, or after that browser requested five newer ones |
 | `MfaAlreadyEnrolledError` | 409 | none | `Conflict` | `enroll()` without `replace: true` for a user with a confirmed authenticator |
 
 When no provider recognises any credentials, the guard answers 401 with `missing_credentials`, and no `error`:

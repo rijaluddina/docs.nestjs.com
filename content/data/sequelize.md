@@ -48,8 +48,8 @@ The `forRoot()` method supports all the configuration properties exposed by the 
     <td>If <code>true</code>, models will be loaded automatically (default: <code>false</code>)</td>
   </tr>
   <tr>
-    <td><code>keepConnectionAlive</code></td>
-    <td>If <code>true</code>, connection will not be closed on the application shutdown (default: <code>false</code>)</td>
+    <td><code>autoCloseConnection</code></td>
+    <td>If <code>true</code>, the connection is closed when the application shuts down (default: <code>true</code>)</td>
   </tr>
   <tr>
     <td><code>synchronize</code></td>
@@ -438,7 +438,7 @@ It's also possible to inject any `Sequelize` instance to the providers:
       useFactory: (albumsSequelize: Sequelize) => {
         return new AlbumsService(albumsSequelize);
       },
-      inject: [getDataSourceToken('albumsConnection')],
+      inject: [getConnectionToken('albumsConnection')],
     },
   ],
 })
@@ -541,6 +541,12 @@ SequelizeModule.forRootAsync({
 ```
 
 This construction works the same as `useClass` with one critical difference - `SequelizeModule` will lookup imported modules to reuse an existing `ConfigService` instead of instantiating a new one.
+
+#### Observability
+
+[NestJS Observe](https://www.observe.nestjs.com/?ref=docs-sequelize 'NestJS Observe'), our official observability platform, records Sequelize queries with no configuration. On PostgreSQL and MySQL, the SDK instruments the driver underneath (`pg` or `mysql2`), so every statement is a span under the provider method that ran it, with its values removed, and a slow request shows which query it was waiting on. The MariaDB, SQLite, and SQL Server dialects run on drivers that aren't instrumented yet (`mariadb`, `sqlite3`, and `tedious`). See [Database queries and outbound HTTP](/observability/sdk#database-queries-and-outbound-http).
+
+<figure><img src="https://www.observe.nestjs.com/docs/telemetry/sql.webp" alt="A query opened in the waterfall" /></figure>
 
 #### Example
 

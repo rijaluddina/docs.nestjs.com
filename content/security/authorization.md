@@ -2,6 +2,8 @@
 
 `@nestjs/authorization` expresses permissions as **policies**: classes whose methods answer "may this user do this?". A policy is an ordinary provider, so it can inject services, and every check is type-checked against the policy method it calls. Policies work on any data shape, including the plain objects that Prisma, Drizzle and Kysely return.
 
+> info **Hint** To see policies in complete applications, follow [Build an e-commerce backend in Node.js](/tutorials/ecommerce-backend), where only staff edit the catalog, or [Build a project-management API in Node.js](/tutorials/project-management-api), where permissions are checked record by record.
+
 In this tutorial, you'll add permissions to the API of an online store for cat food and supplies:
 
 - Guests and customers browse published products. Staff also see drafts, and only staff edit the catalog.
@@ -857,7 +859,7 @@ findAll() {}
 findAll() {}
 ```
 
-It runs in the guard, before any pipe, so it gets the values as the transport delivered them: route params are strings, and nothing is validated yet. A `ParseUUIDPipe` on `customerId` runs after the check, and an id the user may not see gets a 403, not a 400. An error the function throws, such as a `BadRequestException` for a missing param, reaches the client as it is. A denial event carries what the function read in its `args`.
+It runs in the guard, before any pipe, so it gets the values as the transport delivered them: route params are strings, and nothing is validated yet. A `ParseUUIDPipe` on `customerId` runs after the check, and an id the user may not see gets a 403, not a 400. An error the function throws, such as a `BadRequestException` for a missing param, reaches an HTTP client as it is. On WebSockets and microservices, Nest reports an `HttpException` from any guard, this function included, as an internal error, so throw a `WsException` or an `RpcException` there. A denial event carries what the function read in its `args`.
 
 Pass identifiers and scopes, not records. Loading the order in the guard would load it twice, once for the check and once in the handler, and answer 403 before the handler could answer 404. That's why `GET /orders/:id` checks in the service instead.
 

@@ -2,6 +2,8 @@
 
 Most of the concepts discussed elsewhere in this documentation, such as dependency injection, decorators, exception filters, pipes, guards, and interceptors, apply equally to gateways. Wherever possible, Nest abstracts implementation details so that the same components can run across HTTP-based platforms, WebSockets, and microservices. This section covers the aspects of Nest that are specific to WebSockets.
 
+> info **Hint** For a complete chat backend with authenticated sockets, rooms and message history, follow [Build a real-time chat backend in Node.js](/tutorials/realtime-chat).
+
 In Nest, a gateway is a class annotated with the `@WebSocketGateway()` decorator. Gateways are platform-agnostic, so they work with any WebSockets library once an adapter exists for it. Nest supports two WebSocket platforms out of the box: [socket.io](https://github.com/socketio/socket.io) and [ws](https://github.com/websockets/ws). Choose the one that best suits your needs. You can also build your own adapter by following the [adapters guide](/websockets/adapter).
 
 <figure><img class="illustrative-image" src="/assets/Gateways_1.png" /></figure>
@@ -251,6 +253,8 @@ Gateways support three lifecycle hooks. Each has a corresponding interface, desc
 </table>
 
 > info **Hint** Each lifecycle interface is exposed from the `@nestjs/websockets` package.
+
+> warning **Warning** Nest doesn't wait for an async `handleConnection()` to finish before it handles the client's messages, so the hook isn't a gate: messages that arrive before it disconnects the client are still handled. To check each message, bind [guards](/websockets/guards) to the message handlers. To reject a client before any of its messages are handled, use connection-level middleware instead: socket.io's `server.use()` in `afterInit()`, or, with `WsAdapter`, a `verifyClient` function in the `@WebSocketGateway()` options.
 
 #### Server and Namespace
 

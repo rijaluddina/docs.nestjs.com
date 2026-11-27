@@ -20,12 +20,12 @@ By default, Nest middleware is equivalent to [Express](https://expressjs.com/en/
 
 You implement custom Nest middleware either as a function or as a class with the `@Injectable()` decorator. A class should implement the `NestMiddleware` interface, while a function has no special requirements. Let's start by implementing a simple middleware class.
 
-> warning **Warning** Express and Fastify handle middleware differently and provide different method signatures. See the [Performance (Fastify)](/http/performance#middleware) chapter for details.
+> warning **Warning** Express and Fastify handle middleware differently and provide different method signatures, while the Node adapter uses the Express signature. See the [HTTP adapters](/http/performance#middleware) chapter for details.
 
 ```typescript
 @@filename(logger.middleware)
 import { Injectable, NestMiddleware } from '@nestjs/common';
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 @Injectable()
 export class LoggerMiddleware implements NestMiddleware {
@@ -148,6 +148,8 @@ forRoutes({
 });
 ```
 
+> warning **Warning** A plain string path matches subpaths differently across adapters. With Express and the Node adapter, `forRoutes('cats')` also runs the middleware for subpaths like `/cats/breed`. With Fastify, it matches only `/cats`. To match `/cats` and its subpaths on every adapter, put the slash inside the optional wildcard: `forRoutes('cats{{ '{' }}/*splat&#125;')`.
+
 #### Middleware consumer
 
 The `MiddlewareConsumer` is a helper class that provides several built-in methods to manage middleware. All of them can be **chained** in the [fluent style](https://en.wikipedia.org/wiki/Fluent_interface). The `forRoutes()` method accepts a single string, multiple strings, a `RouteInfo` object, a controller class, or multiple controller classes. In most cases, you'll pass a comma-separated list of **controllers**. Below is an example with a single controller:
@@ -208,13 +210,28 @@ With the example above, `LoggerMiddleware` is bound to all routes defined inside
 
 > info **Hint** The `exclude()` method supports wildcard parameters using the [path-to-regexp](https://github.com/pillarjs/path-to-regexp#parameters) package.
 
+Paths passed to `exclude()` are declared without the [global prefix](/faq/global-prefix), which Nest adds unless the route is excluded from it. If an exclusion matches a path that is excluded from the global prefix and has no parameters or wildcards, the middleware is also skipped for that path, which is served without the prefix. This match follows the case sensitivity of the router.
+
+```typescript
+// main.ts
+app.setGlobalPrefix('api', { exclude: ['health', 'health/ready'] });
+
+// app.module.ts
+consumer
+  .apply(LoggerMiddleware)
+  .exclude('health', 'health/*splat')
+  .forRoutes('*splat');
+```
+
+Here, `health/*splat` also skips the middleware for `/health/ready`. It doesn't match `/health` itself, so `health` is listed as well.
+
 #### Functional middleware
 
 The `LoggerMiddleware` class we've been using is minimal: it has no members, no additional methods, and no dependencies. Middleware like this can be defined as a plain function instead of a class. This type of middleware is called **functional middleware**. Let's convert the logger middleware from a class into a function to illustrate the difference:
 
 ```typescript
 @@filename(logger.middleware)
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 export function logger(req: Request, res: Response, next: NextFunction) {
   console.log('Request...');
@@ -270,7 +287,7 @@ import {
   NestMiddleware,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 @Injectable()
 export class AuthMiddleware implements NestMiddleware {

@@ -2,11 +2,15 @@
 
 This chapter covers files in both directions: receiving files that clients upload, and [streaming files](#streaming-files) back to clients.
 
+> info **Hint** For a complete upload service with type and size checks, S3 storage, quotas and expiring links, follow [Build a file upload service in Node.js](/tutorials/file-uploads).
+
 To handle file uploads, Nest provides a built-in module based on the [multer](https://github.com/expressjs/multer) middleware package for Express. Multer handles data posted in the `multipart/form-data` format, which is primarily used to upload files with an HTTP `POST` request. The module is fully configurable, so you can adjust its behavior to your application's requirements.
 
 > warning **Warning** Multer cannot process data that is not in the `multipart/form-data` format.
 
 > info **Hint** If your application runs on the `FastifyAdapter`, the same interceptors are available from the `@nestjs/platform-fastify` package, backed by [@fastify/multipart](https://github.com/fastify/fastify-multipart) instead of Multer, and the decorators and pipes described in this chapter work unchanged. Only the import path changes - see the [Fastify](/http/file-upload#fastify) section below.
+
+> info **Hint** If your application runs on the `NodeAdapter`, import the interceptors and `MulterModule` from `@nestjs/platform-node` instead of `@nestjs/platform-express`. They are the same Multer-based interceptors, so everything in this chapter applies unchanged.
 
 For type safety, install the Multer type definitions:
 
@@ -303,6 +307,8 @@ MulterModule.register({
 
 > info **Hint** The `MulterModule` class is exported from the `@nestjs/platform-express` package.
 
+Options passed to a file interceptor take precedence over these defaults. Starting with NestJS v12.0.4, the two `limits` objects are merged key by key, so a route that sets only `limits.fileSize` keeps a default such as `limits.files`. If one of them is a function, the interceptor's `limits` replaces the default one entirely. Starting with NestJS v12.5, a route option or limit that is `undefined` or `null`, such as a configuration value that isn't set, is left out, so the module's value is kept. To lift a module limit on one route, set it to `Infinity`.
+
 #### Async configuration
 
 To set `MulterModule` options asynchronously instead of statically, use the `registerAsync()` method. As with most dynamic modules, it supports several techniques for async configuration.
@@ -371,9 +377,77 @@ MulterModule.registerAsync({
 
 This is useful when the factory function or the class constructor needs additional dependencies.
 
+#### Memory usage and storage
+
+By default, Multer uses its in-memory storage engine (`memoryStorage()`): every uploaded file is read completely into memory and exposed as a `Buffer` on `file.buffer` before your route handler runs. This is convenient for small files (avatars or CSV imports), but each in-flight upload occupies as much memory as its size, so large files or many concurrent uploads can quickly exhaust the memory of your process.
+
+> warning **Warning** Multer does not limit the size of uploaded files by default. When you keep files in memory, always set `limits.fileSize`.
+
+##### File size limit
+
+Use the `limits` option to reject files that are too large. When a limit is exceeded, Nest responds with a `413 File too large` error (for `fileSize`) or `400 Bad Request` (for other limits, such as `files`) and the route handler is not called.
+
+```typescript
+@Post('upload')
+@UseInterceptors(
+  FileInterceptor('file', {
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  }),
+)
+uploadFile(@UploadedFile() file: Express.Multer.File) {
+  console.log(file.size);
+}
+```
+
+> info **Hint** Unlike `MaxFileSizeValidator`, which runs after the whole file has been received, `limits.fileSize` makes Multer stop storing the file and reject the request as soon as the limit is reached, so oversized files never fully reach memory or disk. See the [Multer limits](https://github.com/expressjs/multer#limits) for the full list of options.
+
+Starting with NestJS v12.5, the number of parts in a request (text fields and files together, `limits.parts`) defaults to 1000, as on Fastify, and a request with more is rejected with `400 Too many parts`. This also caps a `limits.fields`, `limits.files` or `maxCount` above 1000, unless `limits.parts` is raised. Set it to `Infinity` to lift the limit.
+
+##### Field name limits
+
+Field names such as `user[address][city]` or `tags[2]` build nested objects and arrays in the request body. Two limits bound them: `fieldNestingDepth`, the number of nesting levels (`a[b][c]` has 2), and `fieldArrayIndexLimit`, the highest array index (`tags[2]` uses index 2). A request that exceeds either one is rejected with a `400 Bad Request` response. Starting with NestJS v12.2, they default to 32 and 1000 respectively (Multer leaves them unlimited), so that a single request cannot build an arbitrarily deep body or a huge array. Set a limit to `Infinity` to lift it.
+
+##### Disk storage
+
+To keep memory usage constant regardless of file size, write uploads to disk with the `diskStorage()` engine. Multer then streams each file to disk as it arrives, and the file object exposes `destination`, `filename` and `path` instead of `buffer`.
+
+```typescript
+import { extname } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { diskStorage } from 'multer';
+
+@Post('upload')
+@UseInterceptors(
+  FileInterceptor('file', {
+    storage: diskStorage({
+      destination: './uploads',
+      filename: (req, file, cb) => {
+        cb(null, `${randomUUID()}${extname(file.originalname)}`);
+      },
+    }),
+    limits: { fileSize: 1024 * 1024 * 1024 }, // 1 GB
+  }),
+)
+uploadFile(@UploadedFile() file: Express.Multer.File) {
+  console.log(file.path);
+}
+```
+
+> info **Hint** The `diskStorage()` and `memoryStorage()` functions are exported from the `multer` package. As a shorthand, pass `dest: './uploads'` to store files on disk under random names. If you pass a `destination` function instead of a string, you are responsible for creating the directory.
+
+To apply the same storage and limits to every file interceptor in a module, set them as [default options](/http/file-upload#default-options) or with [async configuration](/http/file-upload#async-configuration).
+
+Files stored on disk are not removed automatically once your route handler has run. Delete them (for example with `unlink()` from `fs/promises`) once you have processed them, including when processing fails. Starting with NestJS v12.2, if a pipe rejects the request (for example, because `ParseFilePipe` validation fails), the route handler does not run, and the stored files are removed once the error response has been sent.
+
+##### Sending files to external storage
+
+To store uploads in S3, Cloudflare R2 or another external store without buffering them in memory or writing a temporary file, use a storage engine that streams each file to its destination as it arrives. The [`@nestjs/storage`](/application/file-storage) package provides one, `uploadToDisk()`, which you pass as the `storage` option of `FileInterceptor()`. See [Upload product photos](/application/file-storage#upload-product-photos). Any other Multer [storage engine](https://github.com/expressjs/multer/blob/main/StorageEngine.md) works the same way.
+
+> info **Hint** On the `FastifyAdapter`, you can also receive the file as a stream inside the route handler with `FileStreamInterceptor()`. See [Streaming uploads](/http/file-upload#streaming-uploads).
+
 #### Fastify
 
-Starting with NestJS v12.1, applications running on the `FastifyAdapter` (see [Performance (Fastify)](/http/performance)) can handle file uploads with the same API, backed by the [@fastify/multipart](https://github.com/fastify/fastify-multipart) plugin instead of Multer. The interceptors described in this chapter take the same arguments and options, populate the request in the same way, and fail with the same error responses, while `@UploadedFile()`, `@UploadedFiles()`, `ParseFilePipe`, `ParseFilePipeBuilder` and the built-in file validators work unchanged.
+Starting with NestJS v12.1, applications running on the `FastifyAdapter` (see [Fastify adapter](/http/performance#fastify-adapter)) can handle file uploads with the same API, backed by the [@fastify/multipart](https://github.com/fastify/fastify-multipart) plugin instead of Multer. The interceptors described in this chapter take the same arguments and options, populate the request in the same way, and fail with the same error responses, while `@UploadedFile()`, `@UploadedFiles()`, `ParseFilePipe`, `ParseFilePipeBuilder` and the built-in file validators work unchanged.
 
 First, install the plugin:
 
@@ -397,7 +471,7 @@ import {
 } from '@nestjs/common';
 import {
   FileInterceptor,
-  UploadedMultipartFile,
+  type UploadedMultipartFile,
 } from '@nestjs/platform-fastify/multipart';
 
 @Controller('files')
@@ -451,7 +525,7 @@ As with Multer, files are kept in memory (in `file.buffer`) unless you set the `
 import {
   diskStorage,
   FileInterceptor,
-  UploadedMultipartFile,
+  type UploadedMultipartFile,
 } from '@nestjs/platform-fastify/multipart';
 
 @Post('upload')
@@ -473,7 +547,7 @@ Storage engines follow Multer's storage engine contract (`_handleFile()` and `_r
 
 ##### Limits
 
-`@fastify/multipart` applies stricter defaults than Multer. Unless configured otherwise, the maximum file size (`fileSize`) is the Fastify `bodyLimit` (1 MiB by default) and the maximum number of parts (`parts`) is 1000, whereas Multer limits neither. Larger files are rejected with a `413 File too large` response. You can raise these limits:
+`@fastify/multipart` applies a stricter file size default than Multer. Unless configured otherwise, the maximum file size (`fileSize`) is the Fastify `bodyLimit` (1 MiB by default), whereas Multer doesn't limit it. The maximum number of parts (`parts`) is 1000, as with Multer since NestJS v12.5. Larger files are rejected with a `413 File too large` response. You can raise these limits:
 
 - for a single route, with the `limits` option of the interceptor
 - for a module, with `MultipartModule.register()` or `registerAsync()`
@@ -488,7 +562,9 @@ const app = await NestFactory.create<NestFastifyApplication>(
 );
 ```
 
-Limits set on a route are merged over the ones set with `MultipartModule` key by key, and both are merged over the application-wide ones. The only exception is `fieldNameSize`, which the interceptors don't read from the plugin options - set it on the route or with `MultipartModule`.
+Limits set on a route are merged over the ones set with `MultipartModule` key by key, and both are merged over the application-wide ones. The exceptions are `fieldNameSize`, `fieldNestingDepth`, `fieldArrayIndexLimit` and `jsonFieldsSize`, which the interceptors don't read from the plugin options - set them on the route or with `MultipartModule`.
+
+Text fields sent with the `application/json` content type arrive parsed (see [Differences from Multer](/http/file-upload#differences-from-multer)). Starting with NestJS v12.5, the JSON text of such fields is limited to 1 MiB per request in total (the same as the default Fastify `bodyLimit`), and a request over it is rejected with `400 JSON field values too large`. Raise it with `limits.jsonFieldsSize`, or set it to `Infinity` to lift the limit.
 
 ##### Plugin registration
 
@@ -556,7 +632,7 @@ Besides the [default limits](/http/file-upload#limits), the Fastify interceptors
 - Text fields sent with a `Content-Type: application/json` header arrive parsed, and invalid JSON fails the request with a `400` response (a `@fastify/multipart` feature). Malformed part header lines are ignored, whereas Multer fails the request with a `400` response.
 - `fileFilter` functions and storage engines receive the Fastify request instead of the Express one.
 - The `attachFieldsToBody` plugin option is not supported, as it consumes the request body before the interceptors run.
-- Multer's `fieldNestingDepth` and `fieldArrayIndexLimit` limits and its `highWaterMark`, `fileHwm`, `defCharset` and `streamHandler` options are not supported by the interceptors.
+- Multer's `highWaterMark`, `fileHwm`, `defCharset` and `streamHandler` options are not supported by the interceptors.
 
 #### Example
 
@@ -577,7 +653,7 @@ export class FileController {
 }
 ```
 
-With this approach, the handler takes over the response, so post-controller [interceptor](/interceptors) logic no longer runs. Instead, return a `StreamableFile` instance, and Nest pipes it into the response for you.
+With this approach, the handler takes over the response, so post-controller [interceptor](/interceptors) logic no longer runs. Instead, return a `StreamableFile` instance, and Nest pipes it into the response for you. For content that isn't a file, such as the tokens of an LLM, see [Streaming responses](/http/streaming-responses).
 
 > info **Note** Streaming files applies to **HTTP applications**. The examples below do not apply to GraphQL or microservice applications.
 
@@ -651,7 +727,7 @@ getFile(@Res({ passthrough: true }) res: Response): StreamableFile {
 
 ##### Stream errors
 
-With the Express adapter, if the stream emits an error before any data has been sent, the client receives a `400 Bad Request` response with the error message as its body. If data has already been sent, the response is ended. To customize this behavior, pass a handler to the `setErrorHandler()` method:
+With the Express adapter, if the stream emits an error before any data has been sent, the client receives a `400 Bad Request` response, and the error is logged. Starting with NestJS v12.2, the response body no longer contains the error message, which may include the path of the file. If data has already been sent, the response is ended. To customize this behavior, pass a handler to the `setErrorHandler()` method:
 
 ```typescript
 @Get()
@@ -668,9 +744,9 @@ getReport(): StreamableFile {
 }
 ```
 
-The `setErrorLogger()` method replaces the function that logs errors emitted by the response stream while the file is being written to it.
+The `setErrorLogger()` method replaces the function that logs errors: those the default error handler answers, and those the response stream emits while the file is being written to it.
 
-> info **Note** The error handler and the error logger apply to the Express adapter. With the Fastify adapter, a stream error is handled by the [exceptions layer](/exception-filters), so by default the client receives a `500 Internal Server Error` response.
+> info **Note** The error handler and the error logger apply to the Express and Node adapters. With the Fastify adapter, a stream error is handled by the [exceptions layer](/exception-filters), so by default the client receives a `500 Internal Server Error` response.
 
 ##### Cross-platform support
 

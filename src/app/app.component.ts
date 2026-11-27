@@ -1,5 +1,5 @@
 import { DOCUMENT } from '@angular/common';
-import { ChangeDetectionStrategy, Component, Inject, OnInit } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnInit, inject } from '@angular/core';
 import { Meta, Title } from '@angular/platform-browser';
 import { ActivatedRoute, NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs/operators';
@@ -13,15 +13,13 @@ import { HOMEPAGE_TITLE, SITE_URL, TITLE_SUFFIX } from './constants';
   imports: [RouterOutlet],
 })
 export class AppComponent implements OnInit {
-  private robotsElement: HTMLMetaElement;
+  private readonly titleService = inject(Title);
+  private readonly metaService = inject(Meta);
+  private readonly router = inject(Router);
+  private readonly activatedRoute = inject(ActivatedRoute);
+  private readonly document = inject<Document>(DOCUMENT);
 
-  constructor(
-    private readonly titleService: Title,
-    private readonly metaService: Meta,
-    private readonly router: Router,
-    private readonly activatedRoute: ActivatedRoute,
-    @Inject(DOCUMENT) private readonly document: Document,
-  ) {}
+  private robotsElement: HTMLMetaElement;
 
   public async ngOnInit(): Promise<void> {
     this.router.events
@@ -52,19 +50,45 @@ export class AppComponent implements OnInit {
   }
 
   /**
-   * index.html ships one canonical URL - the site root - for every route, and
-   * a page whose canonical points elsewhere is telling search engines it is a
-   * duplicate of that page. Netlify's prerenderer runs this code, so crawlers
-   * receive the per-page value.
+   * index.html is the template for every page, so it carries no canonical URL:
+   * one value there would tell search engines that every page is a duplicate
+   * of it. This runs when each chapter is prerendered, which puts the page's
+   * own canonical in the HTML it is served as, and again in the browser on
+   * every navigation. The link is created rather than rewritten, so a page
+   * never has two.
    */
   public updateCanonical(event: NavigationEnd): void {
     const path = event.urlAfterRedirects.split(/[?#]/)[0];
     const url = path === '/' ? SITE_URL : `${SITE_URL}${path}`;
-    const link = this.document.head.querySelector<HTMLLinkElement>(
+    let link = this.document.head.querySelector<HTMLLinkElement>(
       'link[rel="canonical"]',
     );
-    link?.setAttribute('href', url);
+    if (!link) {
+      link = this.document.createElement('link');
+      link.setAttribute('rel', 'canonical');
+      this.document.head.appendChild(link);
+    }
+    link.setAttribute('href', url);
     this.metaService.updateTag({ property: 'og:url', content: url });
+    this.updateMarkdownAlternate(path);
+  }
+
+  /**
+   * Every chapter is also published as plain markdown at its own URL with a
+   * `.md` suffix (see tools/generate-llms-txt.ts). This tells an agent reading
+   * the page's HTML where to find it.
+   */
+  private updateMarkdownAlternate(path: string): void {
+    let link = this.document.head.querySelector<HTMLLinkElement>(
+      'link[rel="alternate"][type="text/markdown"]',
+    );
+    if (!link) {
+      link = this.document.createElement('link');
+      link.setAttribute('rel', 'alternate');
+      link.setAttribute('type', 'text/markdown');
+      this.document.head.appendChild(link);
+    }
+    link.setAttribute('href', `${SITE_URL}${path === '/' ? '/index' : path}.md`);
   }
 
   public updateMeta(event: NavigationEnd): void {

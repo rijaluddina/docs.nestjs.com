@@ -1,5 +1,7 @@
 ### Distributed locks
 
+`@nestjs/locks` runs a scheduled job, or any other code, on one instance at a time, with leases that every instance of the application checks in a shared store.
+
 An online store for cat food and supplies runs two scheduled jobs with `@nestjs/schedule`. Every night at 02:00 an export sends the day's invoices to the accounting system, and every five minutes a reconciliation asks the warehouse for a full stock count and writes it to the products table. Both work on one instance. In production the order API runs on three, and `@nestjs/schedule` fires every `@Cron()` on each of them:
 
 - The accounting system records every invoice three times.
@@ -304,7 +306,7 @@ The package ships the contract as a test suite, so you can prove the store befor
 @@filename(test/step-2.drizzle-lock-store.e2e-spec)
 describe('DrizzleLockStore on PGlite, the LockStore contract', () => {
   const client = new PGlite();
-  const db = drizzlePglite(client, { schema }) as unknown as Database;
+  const db = drizzlePglite({ client }) as unknown as Database;
   beforeAll(() => migratePglite(db as never, { migrationsFolder }));
   afterAll(() => client.close());
 
@@ -349,7 +351,7 @@ import { InvoicesModule } from './invoices/invoices.module.js';
 export class AppModule {}
 ```
 
-`LocksModule.forRoot()` takes a `ttl` (the default is `'30s'`: how long a lock lives without a renewal, so how soon another instance takes over after a crash), a `clock` for tests, and `allowInMemoryStorage`. `forRootAsync()` takes the same options from a factory. The module is global, so `Locks`, `LocksContext` and `LocksStorage` are available everywhere. When it initializes, it logs the store in use:
+`LocksModule.forRoot()` takes a `ttl` (the default is `'30s'`: how long a lock lives without a renewal, so how soon another instance takes over after a crash), a `storeTimeout` (the default is `'10s'`: how long to wait for each store call before it fails, so a store that stops answering can't hang a job, a request or the shutdown), a `clock` for tests, and `allowInMemoryStorage`. `forRootAsync()` takes the same options from a factory. The module is global, so `Locks`, `LocksContext` and `LocksStorage` are available everywhere. When it initializes, it logs the store in use:
 
 ```bash
 [Nest] 1270  - 09/24/2026, 9:44:02 AM     LOG [LocksModule] LocksStorage: DrizzleLockStore
@@ -643,7 +645,7 @@ async reconcileStock() {
 That is the whole change. What it does:
 
 - **The first instance whose scheduler fires the job takes the job's lease**, a lock named after the key with an `:owner` suffix, and keeps renewing it every `ttl / 3` for as long as it is up. It runs this tick and every tick after it.
-- **On the other instances, the tick is skipped**: the call resolves without running the method, and a debug line says why. Nothing is queued; the job's schedule is the schedule.
+- **On the other instances, the tick is skipped**: the call resolves without running the method, a debug line says why, and `LocksEvents.jobSkips$` reports it ([Events](/reliability/locks#events)). Nothing is queued; the job's schedule is the schedule.
 - **When the owner dies**, it stops renewing, the lease expires `ttl` (30 seconds) later, and the first instance whose tick comes after that takes the job over. When the owner shuts down cleanly, it finishes the runs in progress, hands the lease back, and the next tick anywhere takes it.
 - **The decorators wrap the method.** `@nestjs/schedule` isn't patched, and it doesn't know they are there: its explorer finds the `@Cron()` metadata on the wrapper, in either decorator order, and calls the wrapper, which asks `LocksModule` whether this call may run. `@Interval()` and `@Timeout()` jobs work the same way, and so does calling the method yourself.
 - **The key** defaults to `ClassName.methodName`. Set it on a job that must never run twice: a renamed class or method changes the default, and during a rolling deploy the old and the new instances would each run the job once. Two jobs with the same default key fail at startup, and so does a job whose key is another job's lease (`<key>:owner`) or an election's key: they would exclude each other silently.
@@ -927,7 +929,9 @@ async export(): Promise<InvoiceExportResult> {
 
 `withLock(key, fn, options)` runs `fn` under the lock and releases it whether `fn` resolves or throws. `wait` is how long to keep trying, with backoff, before it gives up with a `LockNotAcquiredError`; the default is to try once. `acquire(key, options)` is the same without the callback: it resolves a `Lock`, or `null` when the key was taken, and you release it yourself, or with `await using`. A `Lock` has the `fencingToken` and the `signal`, and inside `withLock()` so does `LocksContext`, exactly as in a job.
 
-Neither error carries an HTTP status: contention isn't the caller's mistake, so the handler decides. Here it is a `409`. While the export runs by hand, the scheduled tick on any instance finds the lock held and skips.
+Both also take a `signal` of their own, the request's for example, which stops the waiting. It stops the wait for the store too: a call still waiting for the store's answer rejects with the signal's reason, `fn` doesn't run, and a lock the store grants after that goes back to it. `wait` doesn't cut short a store call already on its way; the module's `storeTimeout` does, so a call takes at most `wait` plus `storeTimeout`. A store that doesn't answer within `storeTimeout` fails the call with a `LockStoreTimeoutError`.
+
+Neither `LockNotAcquiredError` nor `LockStoreTimeoutError` carries an HTTP status: contention and a stalled store aren't the caller's mistake, so the handler decides. Here a taken lock is a `409`, and anything else is rethrown. While the export runs by hand, the scheduled tick on any instance finds the lock held and skips.
 
 > info **Hint** `AdminGuard` is a placeholder. Protect the route with your application's real [authorization](/security/authorization).
 
@@ -1002,7 +1006,11 @@ export class RedisLockStore implements LockStore {
 }
 ```
 
-`SET NX PX` takes the key only if it is free, expiring on Redis's clock in milliseconds, and the `INCR` in the same script draws the token from one counter for every key. Fencing is only as durable as that counter. It never expires, and it must never go back: give Redis persistence (AOF, or RDB with a short interval) and `maxmemory-policy noeviction`, because a counter that restarts at 1 (a restart without persistence, a `FLUSHALL`) hands out tokens that holders already have, and a lock evicted under memory pressure is a lock lost. A failover to an asynchronous replica can lose the last writes too: a lock taken just before it, which is the paused-holder case the token covers, but also the counter's last increments, after which the next holder may draw a token the previous one already has, and the token no longer tells them apart. Where fencing must hold across a failover, keep the locks in the database, whose sequence is in the same WAL as the rows, or replicate Redis synchronously. The `redis.module` provides the client under the `REDIS` token; the example uses a minimal client with ioredis's `eval()` signature, to stay free of dependencies, and in your application it is `new Redis(process.env.REDIS_URL)`:
+`SET NX PX` takes the key only if it is free, expiring on Redis's clock in milliseconds, and the `INCR` in the same script draws the token from one counter for every key. Fencing is only as durable as that counter. It never expires, and it must never go back: give Redis persistence (AOF, or RDB with a short interval) and `maxmemory-policy noeviction`, because a counter that restarts at 1 (a restart without persistence, a `FLUSHALL`) hands out tokens that holders already have, and a lock evicted under memory pressure is a lock lost. A failover to an asynchronous replica can lose the last writes too: a lock taken just before it, which is the paused-holder case the token covers, but also the counter's last increments, after which the next holder may draw a token the previous one already has, and the token no longer tells them apart. Where fencing must hold across a failover, keep the locks in the database, whose sequence is in the same WAL as the rows, or replicate Redis synchronously.
+
+On Redis Cluster, `ACQUIRE` fails with a `CROSSSLOT` error as written: a cluster runs a script only when all its keys hash to the same slot, and the lock's key and the counter don't. Name both under one hash tag, `{{ '{' }}locks{{ '}' }}:key:<key>` and `{{ '{' }}locks{{ '}' }}:fencing-token`: the cluster then hashes only `locks`, so the counter and every lock share one slot, on one shard. A counter under a new name, or on a new cluster, starts again at 1, which is the restart it must never make. Before the first acquire on it, stop the instances that use the old keys and set the new counter to the old one's value (`SET {{ '{' }}locks{{ '}' }}:fencing-token <value>`), so the next token is higher than any already handed out.
+
+The `redis.module` provides the client under the `REDIS` token; the example uses a minimal client with ioredis's `eval()` signature, to stay free of dependencies, and in your application it is `new Redis(process.env.REDIS_URL)`:
 
 ```typescript
 @@filename(redis/redis.module)
@@ -1067,7 +1075,7 @@ describe('the LockStore contract', () => {
 });
 ```
 
-Close the Redis client in `onApplicationShutdown()`, as the module does; `@nestjs/drizzle` closes the database pool in the same phase. Nest runs each shutdown phase for the whole application before the next: the package hands the leases back in `onModuleDestroy()` and releases every other lock still held in `beforeApplicationShutdown()`, so by the time any module's `onApplicationShutdown()` runs, nothing of the package's needs the connection, whatever the import order.
+Close the Redis client in `onApplicationShutdown()`, as the module does; `@nestjs/drizzle` closes the database pool in the same phase. Nest runs each shutdown phase for the whole application before the next: the package hands the leases back in `onModuleDestroy()` and releases every other lock still held in `beforeApplicationShutdown()`, so by the time any module's `onApplicationShutdown()` runs, nothing of the package's needs the connection, whatever the import order. A tick or an election still waiting for the store when the shutdown begins stops waiting: the tick is skipped, and a lock the store grants after that goes back to it, so a stalled store doesn't hold up the deploy.
 
 #### Hold the warehouse feed on one instance
 
@@ -1273,7 +1281,7 @@ export async function startInstance(options: InstanceOptions): Promise<TestingMo
 - **Share the database.** On PGlite, every instance gets the same Drizzle database by overriding the one `DrizzleModule` registers (`getDrizzleToken()`), with the real migrations applied; `DrizzleLockStore` injects it with `@InjectDrizzle()`, so the instances share the locks table as they share it in production. Against a PostgreSQL server, each instance opens its own pool from the database's URL. Without a database, share one `InMemoryLockStore` between the instances by registering it in each with `LocksStorage.registerSource()` and its `replace` option before `init()`.
 - **Fire the jobs yourself.** Call the method (`await job.exportInvoices()`) on each instance, or go through `@nestjs/schedule` with `schedulerRegistry.getCronJob(name).fireOnTick()`. Both reach the wrapper. Point the real schedules at a date that never comes: the example's `vitest.config.mts` sets the two cron variables to February 29th at 3 AM.
 - **Control time.** Override `LOCKS_MODULE_OPTIONS` with a `ManualLockClock`, and every renewal, deadline and `wait` in that instance moves only when the test advances the clock: `await clock.advance('5m')` fires what falls due on the way, in order, and waits for each renewal to reach the store. An instance whose clock you don't advance is a paused process. Against PGlite or a server, the store's clock is real time, so a short `ttl` (`'1s'`) and a `sleep` expire a paused instance's locks; with the in-memory store, give it the same `ManualLockClock` and expiries move with it.
-- **Assert on the log** or on `LocksEvents.events$`: which instance runs a job, every skipped tick, every lost lock, every leadership change. The events are also published on the `nestjs:locks:lock-lost`, `nestjs:locks:leadership-acquired` and `nestjs:locks:leadership-lost` diagnostics channels.
+- **Assert on the log** or on `LocksEvents`: which instance runs a job, every skipped tick (`jobSkips$`), every lost lock and every leadership change (`events$`). The events are also published on the `nestjs:locks:job-skipped`, `nestjs:locks:lock-lost`, `nestjs:locks:leadership-acquired` and `nestjs:locks:leadership-lost` diagnostics channels.
 - **Test your store** with the contract suite, as the Drizzle, TypeORM and Redis stores do, against the server you run in production.
 
 See [End-to-end testing](/fundamentals/testing#end-to-end-testing) for more about the testing setup.
@@ -1283,17 +1291,18 @@ See [End-to-end testing](/fundamentals/testing#end-to-end-testing) for more abou
 - Register a shared store, on your database or Redis, and run the contract suite against it with `concurrent` on, in CI, on the version you run in production. In production the application refuses to start without one, unless `allowInMemoryStorage` is set, which is only right for a single instance.
 - Set `key` on every job that must never run twice, so a rename or a minifier can't change it during a rolling deploy.
 - Pick a `ttl` well above the store's round trip and the longest event-loop stall you accept, and short enough that a crash doesn't skip too many ticks. Renewals go out every `ttl / 3`; 30 seconds fits most jobs. A long job's run lock is renewed at the same pace, so its `ttl` doesn't need to cover the run.
+- Leave `storeTimeout` well above the store's slowest healthy answer: a store call that runs past it fails, so the tick doesn't run and `acquire()` rejects with `LockStoreTimeoutError`. The default, 10 seconds, also bounds how long a stalled store (an exhausted pool, a failover, a Redis client queueing commands while offline) holds up a job, a request or a renewal.
 - Write jobs that do what is due, not what the tick was for. Missed ticks aren't caught up: a crashed owner costs up to `ttl` of ticks, and ticks during a long run are skipped.
 - Pass `LocksContext.signal` to what a job calls, and fence the writes that can't be undone with `LocksContext.fencingToken`, in the same statement that writes. Alert on `lock-lost` from `LocksEvents` or the diagnostics channel: it means renewals failed for longer than `ttl`, because the store was unreachable or the event loop was blocked, and another instance may be running the same critical section.
 - Call `app.enableShutdownHooks()`, so a deploy hands the leases over at once instead of leaving them to expire. Close the Redis client in `onApplicationShutdown()`, the phase in which `@nestjs/drizzle` closes the database pool: the package hands the leases back in `onModuleDestroy()` and releases every other lock in `beforeApplicationShutdown()`, phases Nest completes for the whole application first. A lease whose job started less than a second before the shutdown is kept for the rest of that second rather than handed back, so that instances firing the same tick skip it instead of running it a second time.
 - With the Redis store, give Redis persistence and `maxmemory-policy noeviction`. The fencing counter must never go back, and a lock must never be evicted.
 - With the database store, create the table and the sequence through your migrations, and size the connection pool for one short statement per renewal per held lock, plus one per tick per instance.
 - Keep the instances' clocks synchronized with NTP anyway. Expiry is measured on the store's clock, but a holder counts its own deadline, and `@nestjs/schedule` fires on the instance's clock.
-- Log level: the skipped ticks are logged at `debug`. Keep that level on for a while after the rollout, to see the jobs settle on one instance.
+- Log level: the skipped ticks are logged at `debug`. Keep that level on for a while after the rollout, to see the jobs settle on one instance. To watch them for good, count `LocksEvents.jobSkips$` by `job` and `reason` instead of parsing the log.
 
 #### The store contract
 
-The tutorial wrote the store with Drizzle, with TypeORM and with Redis. This section sums up what any `LockStore` must do, for writing one with another database or ORM. The package README's "Implementing a store" has every rule and the race it prevents.
+The tutorial wrote the store with Drizzle, with TypeORM and with Redis. This section sums up what any `LockStore` must do, for writing one with another database or ORM. The [`LockStore` interface](https://github.com/nestjs/locks/blob/master/lib/interfaces/lock-store.interface.ts) documents the full contract and the races each rule prevents.
 
 **Registration.** The store is an ordinary singleton provider that calls `registerSource(this)` on the injectable `LocksStorage` in its constructor. The registry checks the shape at once, refuses a second registration unless it passes `replace: true`, and locks when `LocksModule` initializes, logging the store in use. With nothing registered, the module uses `InMemoryLockStore`, which excludes callers in one process only. With `NODE_ENV=production`, startup fails instead, unless you set `allowInMemoryStorage: true`.
 
@@ -1320,6 +1329,7 @@ The tutorial wrote the store with Drizzle, with TypeORM and with Redis. This sec
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `ttl` | `'30s'` | How long a lock lives without a renewal, so how soon another instance takes over after a crash. The default for every lock, lease and election. A duration: milliseconds, or a string such as `'15s'` or `'2m'` |
+| `storeTimeout` | `'10s'` | How long to wait for each store call (`acquire()`, `renew()`, `release()`). Past it, the call fails with `LockStoreTimeoutError`: `acquire()` rejects, a tick doesn't run, a renewal is tried again at the next beat, and a lock the store grants after that goes back to it |
 | `clock` | The system clock | A `LockClock`. Tests pass a `ManualLockClock` ([Testing](/reliability/locks#testing)) |
 | `allowInMemoryStorage` | `false` | With `NODE_ENV=production` and no registered store, startup fails; `true` runs on the in-memory store anyway (one instance) |
 | `isGlobal` | `true` | Registers the module globally. Top level of `forRoot()` and `forRootAsync()` |
@@ -1335,7 +1345,7 @@ The tutorial wrote the store with Drizzle, with TypeORM and with Redis. This sec
 | `Locks.withLock(key, fn, options)` | `ttl`, `wait`, `signal` | Runs `fn(lock)` under the lock and releases it; rejects with `LockNotAcquiredError` when the key stayed taken |
 
 - `key` defaults to `ClassName.methodName`, and the two job decorators on one method share it. `ttl` defaults to the module's.
-- `wait` defaults to `0` (try once); a longer wait retries with backoff. `signal` stops the waiting.
+- `wait` defaults to `0` (try once); a longer wait retries with backoff. `signal` stops the waiting, also for a store call in flight. Neither `wait` nor `ttl` bounds a store call: the module's `storeTimeout` does.
 - A `Lock` has `key`, `owner`, `fencingToken`, `signal`, `held`, `release()` and `[Symbol.asyncDispose]`, so `await using` releases it.
 - `LocksContext` has `lock`, `fencingToken` and `signal` inside a job, a `withLock()` callback, or `run(lock, fn)`; outside one, they are `undefined`. [Fence the writes](/reliability/locks#fence-the-writes)
 
@@ -1349,12 +1359,38 @@ The tutorial wrote the store with Drizzle, with TypeORM and with Redis. This sec
 | `leadership-acquired` | `nestjs:locks:leadership-acquired` | None | This instance became the leader of `key` |
 | `leadership-lost` | `nestjs:locks:leadership-lost` | `reason`: `'lost'` or `'released'` | This instance stopped leading: the lease was lost, or it stepped down |
 
+`LocksEvents.jobSkips$` emits a `job-skipped` event for each call to an `@OnOneInstance()` or `@WithoutOverlapping()` job that resolved without running before `onApplicationShutdown()`, and publishes it on `nestjs:locks:job-skipped`. It is apart from `events$`: every instance but the owner skips each tick, so these events are for counting, not alerting. The payload has `type`, `job` (`ClassName.methodName`), `key` (the job's key, not its `<key>:owner` lease) and `reason`:
+
+| `reason` | When |
+| --- | --- |
+| `ownership-unavailable` | The `<key>:owner` lease wasn't granted: another instance holds it, or the store granted it too late to use |
+| `run-lock-unavailable` | The `<key>` run lock wasn't granted: a run is in progress, or the store granted it too late to use |
+| `shutdown` | The application is shutting down |
+
+```typescript
+@@filename(metrics/job-skip-metrics)
+@Injectable()
+export class JobSkipMetrics implements OnModuleInit {
+  constructor(private readonly events: LocksEvents) {}
+
+  onModuleInit() {
+    // skippedTicks: a counter from your metrics library
+    this.events.jobSkips$.subscribe(({ job, reason }) => skippedTicks.add(1, { job, reason }));
+  }
+}
+```
+
+The events are what this instance saw, as it saw it: they don't record a job's last run, and they don't count ticks the scheduler never fired. A store error isn't a skip: the call rejects, as before.
+
+> warning **Warning** A subscriber to `events$`, `jobSkips$` or a `nestjs:locks:*` channel must not throw: rxjs and Node rethrow its error as an `uncaughtException`. A skip subscriber runs on every tick, so a bug in one shows within a tick.
+
 ##### Errors
 
 None of them carries an HTTP status: contention isn't the caller's mistake, so the handler picks the response ([Run the export by hand](/reliability/locks#run-the-export-by-hand) answers `409`).
 
 | Error | Properties | Raised when |
 | --- | --- | --- |
-| `LocksError` | None | The base class of the two below |
+| `LocksError` | None | The base class of the three below |
 | `LockNotAcquiredError` | `key`, `waitMs` | `withLock()` couldn't take the lock within `wait` |
 | `LockLostError` | `key`, `fencingToken`, `detectedBy` | The reason a lost lock's `signal` aborts with: the store refused a renewal (`'renewal'`), or `ttl` passed without a confirmed one (`'deadline'`) |
+| `LockStoreTimeoutError` | `key`, `method`, `timeoutMs` | A store call (`method`: `'acquire'`, `'renew'` or `'release'`) didn't answer within `storeTimeout` |

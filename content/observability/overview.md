@@ -10,6 +10,8 @@ Generic Node.js APM agents attach to the HTTP server and the database driver and
 
 The SDK attaches to the framework through the `instrument` application option of `NestFactory.create()` (available since `@nestjs/core` v11.1.4), so it sees every controller, provider, resolver, and queue consumer as Nest wires them - no process-wide patching, and nothing to import before the rest of your code.
 
+It isn't a replacement for OpenTelemetry: Observe covers the Nest services in your system, whether that's all of your backend or part of it, on its own or beside the OpenTelemetry you already have, and services written in other languages share its traces through OpenTelemetry. See [OpenTelemetry](/observability/opentelemetry#running-beside-opentelemetry).
+
 #### What it offers
 
 Once the SDK is running, every plan - including the free tier - gives you:
@@ -20,12 +22,14 @@ Once the SDK is running, every plan - including the free tier - gives you:
 - **Jobs** - queue consumers and cron runs (for example, BullMQ) get the same treatment as requests, plus queue wait time and retry attempts.
 - **Services** - a per-class, per-method breakdown of own time vs. total time across your application.
 - **Runtime profiling** - CPU, memory, event loop delay and utilization, and garbage collection, sampled from inside the process and compared per instance.
-- **Releases** - every request and job records the version that served it, so a regression introduced by a deploy is visible immediately.
+- **Releases** - every request and job records the version that served it, and each release gets a verdict: whether the deploy made things worse, and which queries, outbound calls, and methods behave differently since (see [Releases and their verdicts](/observability/dashboard#releases-and-their-verdicts)).
 - **Custom metrics** - counters, gauges, and summaries reported from your own code.
 - **Users** - per-user activity, grouped into the actions they actually performed, when your application reports a user identifier.
+- **Issues** - project-scoped tracking for the work your telemetry turns up, with an incident record, a check of whether a release fixed the error, and verification against the pre-incident baseline once you resolve one.
+- **Built-in alerts** - an email when an error Observe has never seen appears, and, for an application that runs around the clock, when its error rate turns unusual or it goes quiet.
 - **Copy agent prompt** - one click turns a failed request, slow job, or failing trace into a self-contained prompt for a coding agent.
 
-Paid plans add **logs streaming** (correlated to traces, with redaction on by default), **alerting** (thresholds, anomaly detection, absence detection, Slack/webhook/email channels), **issues**, team management, and - on the higher tiers - **SSO**, **SLOs** with error budgets and burn-rate alerts, and an **MCP server** so an MCP-compatible agent can query your telemetry directly and set up a new service (see [MCP server](/observability/mcp-server)).
+Paid plans add **logs streaming** (correlated to traces, with redaction on by default), **alert rules** (thresholds, anomaly detection, absence detection, Slack/webhook/email channels, and a starter set for every application), **[production rules](/observability/production-rules)** checked against every kept trace, public **[status pages](/observability/dashboard#status-pages)**, team management with an audit log, and an **MCP server** so an MCP-compatible agent can query your telemetry, judge its own deploys, and set up a new service (see [MCP server](/observability/mcp-server)). The higher tiers add **SSO** and **SLOs** with error budgets and burn-rate alerts.
 
 #### How it is organized
 
@@ -52,15 +56,27 @@ Usage is metered in **Observability Events (OEs)** - one per request, background
 | Scale      |                    200M | 90 days    | ✓             | ✓          |
 | Enterprise |              Negotiated | Negotiated | ✓             | ✓          |
 
-Free has a hard monthly limit - once it is reached, ingestion is rejected until the next period. Pro and Scale allow overage instead of a hard stop, billed per additional million events, so a busy month doesn't mean lost telemetry. Annual billing is discounted against the monthly price. For current prices, seat counts, and overage rates, see the [pricing page](https://www.observe.nestjs.com/ 'NestJS Observe').
+Free keeps recording requests, jobs, and errors past its allowance, and gives up detail in stages instead:
+
+- **A paced day.** Once your applications send 30,000 events in one UTC day (a tenth of the month's allowance), most trace waterfalls pause until 00:00 UTC, so one noisy day can't spend the month. The spans held back don't count toward the allowance.
+- **Reduced ingest, past 300k events.** Charts stay live, but most traces arrive without their spans.
+- **Refused, at 600k events.** At twice the allowance, the collector answers new telemetry with a `429` until the next period. It's dropped, not queued.
+
+While a day is paced or ingest is reduced, server errors, failed jobs, and anything slower than 1 second keep their full traces. Pro and Scale allow overage instead of a hard stop, billed per additional million events, so a busy month doesn't mean lost telemetry.
+
+On plans that keep data longer than 7 days, the span tree of an execution that was both fast and successful (under 1 second, no 5xx, no failed job) is dropped after 7 days; slow and failed ones keep their waterfall for the full retention window. The executions themselves, and every percentile, error rate, and SLO, are kept for the whole window. Annual billing is discounted against the monthly price. For current prices, seat counts, and overage rates, see the [pricing page](https://www.observe.nestjs.com/ 'NestJS Observe').
 
 To upgrade, open **Billing → Manage subscription** for the team that owns your projects. From the same area, the **Usage** page tracks your Observability Events against the allowance, broken down by project, and lets you set **quota notifications** (up to five thresholds, e.g. 50%, 80%, 100%) to get an email when usage crosses one.
 
-> info **Hint** Ingestion volume is controllable without a redeploy through per-project **spend controls**: trace-coherent span sampling, a per-minute rate cap, and drop filters for known-noisy traffic like `/health*`. Errors are never sampled or dropped by these controls. You can also stop telemetry from being generated at all on the SDK side - see [Ignoring noisy operations](/observability/sdk#ignoring-noisy-operations).
+> info **Hint** Ingestion volume is controllable without a redeploy through per-project **spend controls**: trace-coherent span sampling, a per-minute rate cap, and drop filters for known-noisy traffic like `/health*`. Sampling always keeps server errors and slow traces. The rate cap is a ceiling for runaway volume: a batch refused over it is lost whole, errors included. You can also stop telemetry from being generated at all on the SDK side - see [Ignoring noisy operations](/observability/sdk#ignoring-noisy-operations).
+
+On Pro and Scale, **Billing → Spend controls** also caps what overage can cost. **Spike protection** (on by default on Pro, and for the first month on Scale) pauses overage when usage surges and this month's overage, at today's pace, would come to $50 or more. A **monthly overage budget** pauses it once the month's overage reaches the amount you set; a budget of $0 collects nothing past the included events. While overage is paused, server errors, failed jobs, and runtime and custom metrics keep flowing, unbilled; everything else past the included events is dropped, not billed, until the 1st, or until you resume, change the budget, or upgrade. SDK 0.3.13 and later switch to sending only what a pause keeps while it lasts.
 
 #### First project
 
-A new account is offered a short **setup guide** that walks through the real pages - it highlights *Create Project*, then takes you into the new project to add an application and an API key, and finishes on the banner that waits for your first event. The same steps by hand:
+The quickest way to a first project starts in your terminal. Run `npx @nestjs/observe link` in your project's directory and approve the code it prints at [observe.nestjs.com/link](https://www.observe.nestjs.com/link 'Link a project to NestJS Observe'), signing up first if you don't have an account. Approving creates the project and the application if you don't have them yet and issues an API key, which the command writes into the project's `.env`. If the application doesn't use the [SDK](/observability/sdk) yet, the command also installs it and wires it in - see [Linking from the terminal](/observability/sdk#linking-from-the-terminal). A project generated by `nest new` with Observe offers this step right after installation.
+
+Starting from the dashboard instead, a new account is offered a short **setup guide** that walks through the real pages - it highlights *Create Project*, then takes you into the new project to add an application and an API key, and finishes on the banner that waits for your first event. The same steps by hand:
 
 1. **Create a project** and give it a name.
 2. **Add an application** to it. An application needs nothing beyond a name - the routes it serves, the jobs it processes, and the metrics it reports are all discovered from the telemetry the SDK sends.
@@ -73,6 +89,22 @@ A new account is offered a short **setup guide** that walks through the real pag
 
 > warning **Warning** Treat `appKey` and `appSecret` like any other credential: read them from environment variables or a secrets manager, never commit them to source control. You can revoke a key from the same page at any time; applications still using it can no longer send telemetry.
 
+#### Performance overhead
+
+The SDK adds very little to a request: about a tenth of a millisecond to the median latency of a typical endpoint, and a few microseconds of CPU per traced call. Spans are recorded on the thread that serves the request; every `flushInterval` that thread serializes the batch, and a worker thread compresses and sends it. Measured in October 2026 against the same Nest 12 application without the SDK, on Express, Node 24 and an Apple M1 Pro:
+
+| Endpoint with                             | 1 traced call   | 9 traced calls | 102 traced calls |
+| ----------------------------------------- | --------------- | -------------- | ---------------- |
+| Median latency added at 150 requests/s    | +0.10 ms        | +0.09 ms       | +0.45 ms         |
+| CPU added per request, process fully busy | +9 µs           | +29 µs         | +115 µs          |
+| CPU added at 150 requests/s               | +3.5% of a core | +4% of a core  | +10% of a core   |
+
+The nine calls are a guard, an interceptor, a pipe, a controller, a service and two repositories; the 102 are a service calling another provider in a loop. As a rule of thumb, the CPU cost is about 8 µs per request plus 1-2.5 µs per traced call, and at light load a request that takes 10 ms gets about 1% slower. Memory grows by about 11 MB at boot and 32-64 MB under load, and an idle process spends 0.3-0.6% of one core on the SDK, almost all of it on the worker thread.
+
+For scale, the throughput other Node.js agents lose in third-party benchmarks on near-empty endpoints works out to 45 µs per request for Sentry, 130 µs for Datadog and 200 µs for New Relic ([NodeSource](https://benchmark.nodesource.com/ 'NodeSource Node.js benchmarks')), and 31-77 µs for OpenTelemetry ([Platformatic](https://blog.platformatic.dev/the-hidden-cost-of-context 'The hidden cost of context')). Worked out the same way, the SDK adds 7 µs on the one-call endpoint and 20 µs on the nine-call one. Machines, and what each agent records, differ, so read this as a direction rather than a ranking.
+
+> info **Hint** The benchmark and its full results are in the [SDK repository](https://github.com/nestjs/observe/blob/master/bench/README.md 'NestJS Observe SDK benchmark'). Run `npm run bench` in a clone to reproduce them on your own hardware in about 8 minutes.
+
 #### Where to go next
 
 - [SDK](/observability/sdk) - installation, the three-line quick start, and every configuration option.
@@ -80,4 +112,5 @@ A new account is offered a short **setup guide** that walks through the real pag
 - [Distributed tracing](/observability/distributed-tracing) - propagating a trace id across HTTP, gRPC, microservice transports, and GraphQL.
 - [Error monitoring](/observability/error-monitoring) - what gets captured, source context, grouping errors into defects, and getting from an error to a verified fix.
 - [Dashboard](/observability/dashboard) - what each view shows once telemetry is flowing, and how alerts, SLOs, and issues build on it.
+- [Production rules](/observability/production-rules) - writing down what a request or job may do, checked on every kept trace.
 - [MCP server](/observability/mcp-server) - querying your telemetry from Claude Code, Cursor, VS Code, or your own agent.

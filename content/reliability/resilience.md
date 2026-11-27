@@ -1,5 +1,7 @@
 ### Resilience
 
+`@nestjs/resilience` adds retries, timeouts, circuit breakers, bulkheads and fallbacks to controllers, resolvers, message handlers and gateways, as decorators.
+
 Sooner or later, every application that calls another system meets one that is slow or down. Without a plan, a slow dependency ties up your request handlers, your clients wait until their own timeouts fire, and retries from every layer pile even more load onto the service that is already struggling.
 
 `@nestjs/resilience` gives you the usual tools as decorators: **retry**, **timeout**, **circuit breaker**, **bulkhead** and **fallback**. They apply to your application's **entrypoints**, which are controllers, GraphQL resolvers, microservice message handlers and WebSocket gateways. For code inside services, the same settings are available as policy objects. A single global interceptor applies the decorators, so they behave the same on every transport, and each failure becomes that transport's native error. Over HTTP, for example, a timeout answers `504 Gateway Timeout` and an open breaker answers `503 Service Unavailable` with a `Retry-After` header.
@@ -217,7 +219,7 @@ Client errors are not failures. A request for an unknown order throws `NotFoundE
 
 #### Fail fast with a circuit breaker
 
-The preset's breaker records the outcome of every attempt. The `carrier` breaker opens once it has seen at least `minimumCalls` (10) calls, and at least `failureRateThreshold` (50%) of them failed. By default it looks at the last 20 calls. Every error counts as a failure, timeouts included, except client errors and rejections from other policies. A client error is a 4xx `HttpException`, or any other error with a 4xx `status` or `statusCode` property. That covers `CarrierError`: when the carrier answers `422` to a malformed request, it isn't down, so the breaker ignores the error and the retry doesn't repeat it. A `408` or `429` is the exception, because it means the carrier is pushing back, so it counts like a `5xx`. To change what counts, pass a `recordIf` function in the breaker options.
+The preset's breaker records the outcome of every attempt. The `carrier` breaker opens once it has seen at least `minimumCalls` (10) calls, and at least `failureRateThreshold` (50%) of them failed. By default it looks at the last 20 calls. Every error counts as a failure, timeouts included, except client errors and rejections from other policies. A client error is a 4xx `HttpException`, or any other error with a 4xx `status` or `statusCode` property. That covers `CarrierError`: when the carrier answers `422` to a malformed request, it isn't down, so the breaker ignores the error and the retry doesn't repeat it. A `408` or `429` from the carrier is the exception, because it means the carrier is pushing back, so it counts like a `5xx`. An `HttpException` with one of those statuses is still a client error: the handler threw it to answer its own caller, and that says nothing about the carrier. To change what counts, pass a `recordIf` function in the breaker options.
 
 While the breaker is **open**, calls fail immediately and the carrier is not called at all. The client gets a `503` with a `Retry-After` header: the number of seconds until the breaker lets a probe call through. The retry wraps the breaker, so a rejection is never retried.
 
@@ -379,6 +381,8 @@ Both modules register a global interceptor, and the one imported first runs oute
 - The stored response is the final outcome, after retries and any fallback.
 - A `503` or `504` is a 5xx response, so the key is released and the client can try again later with the same key.
 
+Releasing the key on a `504` has a catch. The key is released as soon as the timeout answers, but the timed-out run may still be in progress, or may already have reached the carrier, so a retry with the same key can overlap it. That's why the side effect has to be safe to repeat downstream, as the carrier makes it with `reference`. Passing the signal on, as `createShipment()` does, stops the local work sooner.
+
 #### Use the same policies inside services
 
 Pending orders include a shipping estimate in their `total`. Every 15 minutes, a background job re-quotes them. The job isn't an entrypoint, so it uses a **policy object**, which you get from `ResilienceService`:
@@ -440,6 +444,7 @@ Add `RepricingService` to the providers of `ShippingModule`, and call `repricePe
 A few details differ from entrypoints:
 
 - `execute()` passes your function the attempt's `signal` and `attempt` number. The `source` option labels the events this call emits.
+- A call that returns normally with a bad result, such as a `fetch()` that resolves with a 503 `Response`, isn't an error, so `retryIf` never sees it. Set `retryOnResult(result, attempt)` in the `retry` options of `create()` or of a preset to retry it. Entrypoints ignore it, and `@Retry()` has no such option.
 - A policy object has no `GET` or `POST` to look at, so the preset's retry **always** applies. Only wrap calls that are safe to repeat (a quote is).
 - The route's `@Timeout('1.5s')` belongs to the route. The job gets the preset's 2 seconds.
 - Create the policy once, for example in the constructor, not on every call. For options that aren't a preset, use `resilience.create(options, name)`.
