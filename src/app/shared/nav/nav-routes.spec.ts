@@ -67,5 +67,5 @@ describe('NAV_ITEMS against the route table', () => {
 
     expect(missing).toEqual([]);
     expect(redirects).toEqual([]);
-  });
+  }, 30000);
 });

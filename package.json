@@ -41,14 +41,14 @@
     "@angular/platform-server": "22.2.6",
     "@angular/router": "22.2.6",
     "@angular/ssr": "22.2.7",
-    "prismjs": "1.30.0",
-    "rxjs": "7.8.2",
-    "tslib": "2.9.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "minisearch": "^7.2.0",
+    "prismjs": "1.30.0",
+    "rxjs": "7.8.2",
     "serverless-http": "^4.0.0",
+    "tslib": "2.9.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -78,5 +78,13 @@
     "vitest": "5.1.0",
     "yargs": "17.7.3",
     "zone.js": "0.16.3"
+  },
+  "overrides": {
+    "dgeni-packages": {
+      "marked": "4.3.0"
+    },
+    "nodemon": {
+      "minimatch": "11.0.9"
+    }
   }
 }
